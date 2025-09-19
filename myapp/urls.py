@@ -1,8 +1,9 @@
-from django.contrib import admin
-from django.urls import path, include
+from django.urls import path
+from . import views
 
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('', include('myproject.urls')),
+    path('', views.index, name='index'),
+    path('single/', views.single_input, name='single_input'),
+    path('csv/', views.csv_upload, name='csv_upload'),
 ]

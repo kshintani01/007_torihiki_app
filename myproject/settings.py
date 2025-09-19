@@ -17,7 +17,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'myproject',
+    'myapp',
 ]
 
 MIDDLEWARE = [
@@ -31,7 +31,7 @@ MIDDLEWARE = [
 ]
 
 
-ROOT_URLCONF = 'myapp.urls'
+ROOT_URLCONF = 'myproject.urls'
 
 
 TEMPLATES = [
@@ -51,7 +51,7 @@ TEMPLATES = [
 ]
 
 
-WSGI_APPLICATION = 'myapp.wsgi.application'
+WSGI_APPLICATION = 'myproject.wsgi.application'
 
 
 DATABASES = {

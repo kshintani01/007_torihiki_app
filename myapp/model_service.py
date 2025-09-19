@@ -20,32 +20,39 @@ def _load_model_and_classes():
     """
     path = _resolve_model_path()
     if not path.exists():
-        raise FileNotFoundError(f"モデルファイルが見つかりません: {path}")
+        print(f"警告: モデルファイルが見つかりません: {path}")
+        return None, None
 
-    obj = joblib.load(path)
+    try:
+        obj = joblib.load(path)
 
-    # A) dict 形式（あなたの train スクリプトの保存形式）
-    if isinstance(obj, dict):
-        if "pipeline" not in obj:
-            raise ValueError("model joblib は dict ですが 'pipeline' キーがありません。")
-        pipeline = obj["pipeline"]
-        classes = obj.get("classes", None)  # 学習時ラベル名（推奨）
-        return pipeline, classes
+        # A) dict 形式（あなたの train スクリプトの保存形式）
+        if isinstance(obj, dict):
+            if "pipeline" not in obj:
+                raise ValueError("model joblib は dict ですが 'pipeline' キーがありません。")
+            pipeline = obj["pipeline"]
+            classes = obj.get("classes", None)  # 学習時ラベル名（推奨）
+            return pipeline, classes
 
-    # B) それ以外は推定器とみなす
-    estimator = obj
-    classes = None
-    # 推定器 or 最終推定器から classes_ を拾えるなら拾う
-    if hasattr(estimator, "classes_"):
-        classes = list(estimator.classes_)
-    elif hasattr(estimator, "steps"):  # Pipeline
-        try:
-            last_est = estimator.steps[-1][1]
-            if hasattr(last_est, "classes_"):
-                classes = list(last_est.classes_)
-        except Exception:
-            pass
-    return estimator, classes
+        # B) それ以外は推定器とみなす
+        estimator = obj
+        classes = None
+        # 推定器 or 最終推定器から classes_ を拾えるなら拾う
+        if hasattr(estimator, "classes_"):
+            classes = list(estimator.classes_)
+        elif hasattr(estimator, "steps"):  # Pipeline
+            try:
+                last_est = estimator.steps[-1][1]
+                if hasattr(last_est, "classes_"):
+                    classes = list(last_est.classes_)
+            except Exception:
+                pass
+        return estimator, classes
+    except Exception as e:
+        print(f"警告: モデルファイルの読み込みに失敗しました: {path}")
+        print(f"エラー: {e}")
+        print("アプリケーションは起動しますが、予測機能は無効です。")
+        return None, None
 
 MODEL, SAVED_CLASSES = _load_model_and_classes()
 
@@ -116,6 +123,10 @@ def get_classes():
     - 次点: 推定器の classes_（整数など）
     - どれも無ければ 0..C-1
     """
+    # モデルが利用できない場合のデフォルト
+    if MODEL is None:
+        return np.array(["不明"])
+    
     # 1) 保存済みのラベル名（推奨）
     if SAVED_CLASSES is not None and len(SAVED_CLASSES) > 0:
         return np.array(SAVED_CLASSES)
@@ -133,14 +144,27 @@ def get_classes():
 
     # 3) どうしても無い場合（通常は来ない）
     # ここに来た場合は、predict_proba 実行時の列数から作る
-    dummy = pd.DataFrame([{}])
-    proba = _predict_proba(MODEL, dummy)
-    C = proba.shape[1]
-    return np.arange(C)
+    try:
+        dummy = pd.DataFrame([{}])
+        proba = _predict_proba(MODEL, dummy)
+        C = proba.shape[1]
+        return np.arange(C)
+    except:
+        return np.array(["不明"])
 
 CLASSES = get_classes()
 
 def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = None):
+    if MODEL is None:
+        return {
+            "error": "モデルが利用できません。モデルファイルの読み込みに失敗している可能性があります。",
+            "pred_class": None,
+            "proba": {},
+            "threshold": float(threshold),
+            "decision": False,
+            "used_topk": int(topk or 0),
+        }
+    
     X = pd.DataFrame([features])
     X = _restrict_to_topk(X, topk)
     proba = _predict_proba(MODEL, X)[0]
@@ -156,6 +180,13 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
     }
 
 def predict_df(df: pd.DataFrame, topk: Optional[int] = None):
+    if MODEL is None:
+        out = df.copy()
+        out["pred_class"] = "モデル利用不可"
+        out["error"] = "モデルが利用できません"
+        out["used_topk"] = int(topk or 0)
+        return out
+    
     X = _restrict_to_topk(df, topk)
     proba = _predict_proba(MODEL, X)
     pred_idx = proba.argmax(axis=1)
