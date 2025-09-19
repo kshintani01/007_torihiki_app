@@ -1,0 +1,5 @@
+django
+pandas
+scikit-learn
+numpy
+xgboost

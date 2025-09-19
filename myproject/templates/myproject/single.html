@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>単票入力 - 分類アプリ POC</title>
+<link rel="stylesheet" href="/static/myproject/styles.css?v=20250901-1">
+</head>
+<body>
+<header class="app-header">
+<h1>単票入力</h1>
+<nav><a href="/">← 戻る</a></nav>
+</header>
+
+
+<main class="container">
+<form method="post" class="form-card">
+{% csrf_token %}
+<div class="form-row">{{ form.age.label_tag }} {{ form.age }}</div>
+<div class="form-row">{{ form.income.label_tag }} {{ form.income }}</div>
+<div class="form-row">{{ form.category.label_tag }} {{ form.category }}</div>
+<div class="form-row">{{ form.threshold.label_tag }} {{ form.threshold }}</div>
+<button type="submit" class="btn">予測する</button>
+</form>
+
+
+{% if result %}
+<section class="result">
+<h2>結果</h2>
+<p><strong>予測クラス:</strong> {{ result.pred_class }}</p>
+<p><strong>確率:</strong>
+{% for k,v in result.proba.items %}
+<span class="badge">{{ k }}: {{ v|floatformat:3 }}</span>
+{% endfor %}
+</p>
+<p><strong>判定(しきい値 {{ result.threshold }}):</strong>
+{% if result.decision %}<span class="ok">True</span>{% else %}<span class="ng">False</span>{% endif %}
+</p>
+
+
+{% if features %}
+<details class="details">
+<summary>入力値</summary>
+<pre>{{ features|safe }}</pre>
+</details>
+{% endif %}
+</section>
+{% endif %}
+</main>
+</body>
+</html>

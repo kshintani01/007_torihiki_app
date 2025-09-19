@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSVアップロード - 分類アプリ POC</title>
+<link rel="stylesheet" href="/static/myproject/styles.css?v=20250901-1">
+</head>
+<body>
+<header class="app-header">
+<h1>CSVアップロード</h1>
+<nav><a href="/">← 戻る</a></nav>
+</header>
+
+
+<main class="container">
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <form method="post" enctype="multipart/form-data" class="form-card">
+    {% csrf_token %}
+    <div class="form-row">
+        <label for="csv_file">CSVファイル</label>
+        <input type="file" name="csv_file" accept=".csv" required>
+    </div>
+    <div class="form-row">
+        <label for="topk">使用する特徴量の数（0=全て）</label>
+        <input type="number" name="topk" min="0" placeholder="0">
+    </div>
+    <button type="submit" class="btn">実行</button>
+</form>
+
+    
+
+<section class="hint">
+<h3>CSV仕様（POC）</h3>
+<ul>
+<li>ヘッダは特徴量名（列順は自由・未知列は無視）。</li>
+<li>出力は元CSVに <code>pred_class</code> と <code>pred_prob_*</code> を追記。</li>
+</ul>
+</section>
+</main>
+</body>
+</html>
