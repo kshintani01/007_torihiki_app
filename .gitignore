@@ -314,3 +314,6 @@ pip-selfcheck.json
 Dockerfile
 .dockerignore
 db.sqlite3
+
+config/
+models/
