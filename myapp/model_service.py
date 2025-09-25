@@ -1,30 +1,20 @@
 # predictor/model_service.py
-import os, json
-from pathlib import Path
+import os, io, json, joblib
 import numpy as np
 import pandas as pd
 import joblib
 from django.conf import settings
+from .services.blob_store import download_joblib_bytes, download_text, models_path, config_path
 from typing import Optional 
 
-def _resolve_model_path():
-    # あなたの保存名に合わせる（環境変数 MODEL_PATH で上書き可）
-    default_path = Path(settings.BASE_DIR) / "models" / "xgb_std_pipeline.joblib"
-    return Path(os.getenv("MODEL_PATH") or default_path)
+def _resolve_model_blob_path() -> str:
+    return os.getenv("MODEL_BLOB_PATH") or models_path("xgb_std_pipeline.joblib")
 
 def _load_model_and_classes():
-    """
-    - パターンA: joblib が dict を返す {"pipeline": pipe, "classes": classes}
-    - パターンB: joblib が 推定器（Pipeline含む）を返す（classes_ を持つ）
-    の両方に対応。
-    """
-    path = _resolve_model_path()
-    if not path.exists():
-        print(f"警告: モデルファイルが見つかりません: {path}")
-        return None, None
-
     try:
-        obj = joblib.load(path)
+        blob_path = _resolve_model_blob_path()
+        bio = download_joblib_bytes(blob_path)
+        obj = joblib.load(bio)
 
         # A) dict 形式（あなたの train スクリプトの保存形式）
         if isinstance(obj, dict):
@@ -49,7 +39,7 @@ def _load_model_and_classes():
                 pass
         return estimator, classes
     except Exception as e:
-        print(f"警告: モデルファイルの読み込みに失敗しました: {path}")
+        print(f"警告: モデルファイルの読み込みに失敗しました(Blob)")
         print(f"エラー: {e}")
         print("アプリケーションは起動しますが、予測機能は無効です。")
         return None, None
@@ -231,20 +221,22 @@ def get_required_features():
 
 def _load_shap_ordered_features():
     """
-    config/shap_ordered_features.json を読み、重要度降順の列名リストを返す。
+    Blob 上の config/shap_ordered_features.json を読み、重要度降順の列名リストを返す。
     無ければ学習時の全特徴量順序にフォールバック。
     期待フォーマット:
       {"ordered": ["featA","featB",...]}
     """
-    path = Path(settings.BASE_DIR) / "config" / "shap_ordered_features.json"
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            ordered = data.get("ordered") or data.get("topk")  # 互換
-            if isinstance(ordered, list) and len(ordered) > 0:
-                return ordered
-        except Exception:
-            pass
+    blob_path = os.getenv("SHAP_ORDER_BLOB_PATH") or config_path("shap_ordered_features.json")
+    try:
+        text = download_text(blob_path)
+        data = json.loads(text)
+        ordered = data.get("ordered") or data.get("topk")  # 互換
+        if isinstance(ordered, list) and len(ordered) > 0:
+            return ordered
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
     return get_required_features()
 
 def _restrict_to_topk(df: pd.DataFrame, k: Optional[int]) -> pd.DataFrame:

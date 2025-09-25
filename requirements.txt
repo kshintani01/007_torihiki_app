@@ -6,3 +6,6 @@ xgboost
 gunicorn
 gevent
 whitenoise
+azure-storage-blob>=12.21.0
+azure-identity>=1.17.0
+python-dotenv>=1.0.1

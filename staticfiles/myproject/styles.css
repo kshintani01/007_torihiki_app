@@ -1,0 +1,112 @@
+:root {
+  --bg:#f3f4f6;        /* 明るい背景 */
+  --card:#ffffff;      /* 白カード */
+  --text:#111827;      /* 濃いグレー文字 */
+  --muted:#6b7280;     /* 落ち着いたグレー */
+  --accent:#0ea5e9;    /* 青系アクセント */
+  --ok:#16a34a;
+  --ng:#dc2626;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: var(--text);
+  background: linear-gradient(180deg,#f9fafb,#f3f4f6 40%,#e5e7eb 100%);
+}
+
+.app-header { padding: 24px 16px; text-align: center; }
+.app-header h1 { margin: 0; font-size: 28px; }
+.subtitle { color: var(--muted); margin-top: 8px; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 16px; }
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(260px,1fr));
+  gap: 16px;
+}
+
+.card {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 20px;
+  text-decoration: none;
+  color: var(--text);
+  box-shadow: 0 4px 12px rgba(0,0,0,.08);
+  border: 1px solid #e5e7eb;
+  transition: transform .15s ease, border-color .2s ease;
+}
+.card:hover { transform: translateY(-2px); border-color: var(--accent); }
+
+.form-card {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.08);
+  border: 1px solid #e5e7eb;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.form-row input,
+.form-row select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.btn {
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.result {
+  margin-top: 16px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.badge {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(14,165,233,.12);
+  border: 1px solid rgba(14,165,233,.4);
+}
+
+.ok { color: var(--ok); font-weight: 700; }
+.ng { color: var(--ng); font-weight: 700; }
+.details { margin-top: 8px; }
+
+.alert {
+  background: #fee2e2;     /* 明るい赤背景 */
+  border: 1px solid #fecaca;
+  padding: 12px;
+  border-radius: 12px;
+  color: #991b1b;
+}
+
+.hint { margin-top: 16px; color: var(--muted); }
+
+.footer { text-align: center; color: var(--muted); padding: 24px; }
