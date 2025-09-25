@@ -6,6 +6,9 @@ from .forms import SinglePredictForm
 from .preprocess import preprocess_record, preprocess_df
 from .model_service import predict_one, predict_df
 
+def health_check(request):
+    return HttpResponse("Hello, world. You're at the health check.")
+
 def index(request):
     return render(request, 'myproject/index.html')
 
