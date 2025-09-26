@@ -19,23 +19,35 @@ def _auto_numeric_cast(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.copy()
     for c in out.columns:
-        s = out[c]
-        # 既に numeric はスキップ
-        if pd.api.types.is_numeric_dtype(s):
+        try:
+            s = out[c]
+            # 既に numeric はスキップ
+            if pd.api.types.is_numeric_dtype(s):
+                continue
+            
+            # 文字列の空白を NaN に統一（念のため）
+            if s.dtype == "object":
+                # まず文字列として扱い、'nan'文字列も考慮
+                s_str = s.astype(str).str.strip()
+                s_str = s_str.replace({"": np.nan, "nan": np.nan, "None": np.nan, "null": np.nan})
+                s = s_str
+            
+            # 数値変換を試行
+            coerced = pd.to_numeric(s, errors="coerce")
+            nn = s.notna().sum()
+            
+            if len(out) <= 1:
+                # 単票: 1セルでも数値化できれば採用
+                if coerced.notna().any():
+                    out[c] = coerced
+            else:
+                # 複数行: 8割以上が数値化できるなら採用
+                if nn > 0 and (coerced.notna().sum() / nn) >= 0.8:
+                    out[c] = coerced
+        except Exception as e:
+            # 変換に失敗した場合はそのまま保持
+            print(f"列 {c} の数値変換に失敗: {e}")
             continue
-        # 文字列の空白を NaN に統一（念のため）
-        if s.dtype == "object":
-            s = s.astype(str).str.strip().replace({"": np.nan})
-        coerced = pd.to_numeric(s, errors="coerce")
-        nn = s.notna().sum()
-        if len(out) <= 1:
-            # 単票: 1セルでも数値化できれば採用
-            if coerced.notna().any():
-                out[c] = coerced
-        else:
-            # 複数行: 8割以上が数値化できるなら採用
-            if nn > 0 and (coerced.notna().sum() / nn) >= 0.8:
-                out[c] = coerced
     return out
 
 def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,12 +56,25 @@ def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
        - 空文字/空白のみの文字列は NaN
        - Python の None も NaN
        - np.isnan は使わず、pd.isna 系で扱う
+       - データ型を安全に処理
     """
+     df = df.copy()
+     
      # 空文字や空白だけのセルを NaN に
      df = df.replace(r'^\s*$', np.nan, regex=True)
-     # 'None' 文字列などの紛れがあればここで追加正規化しても良い:
-     # df = df.replace({'None': np.nan, 'NULL': np.nan})
+     
+     # 'None' 文字列などの紛れがあればここで追加正規化
+     df = df.replace({'None': np.nan, 'NULL': np.nan, 'null': np.nan, '': np.nan})
+     
+     # 数値型への変換を安全に行う
      df = _auto_numeric_cast(df)
+     
+     # object型カラムで残っているものは文字列として正規化
+     for col in df.columns:
+         if df[col].dtype == 'object':
+             df[col] = df[col].astype(str)
+             df[col] = df[col].replace({'nan': np.nan, 'None': np.nan})
+     
      return df
 
 def _load_model_and_classes():
@@ -108,15 +133,32 @@ def _align_columns(df: pd.DataFrame, estimator):
     """
     学習時列順が分かる場合はそれに合わせる。不足列は NaN で埋める。余分列は捨てる。
     """
-    names = FEATURE_NAMES_IN
-    df2 = df.copy()
-    df2 = df2.replace(r'^\s*$', np.nan, regex=True)
-    if not names:
-        return _auto_numeric_cast(df2)
-    for col in names:
-        if col not in df2.columns:
-            df2[col] = np.nan
-    return df2[names]
+    try:
+        names = FEATURE_NAMES_IN
+        df2 = df.copy()
+        
+        # 空文字列をNaNに変換
+        df2 = df2.replace(r'^\s*$', np.nan, regex=True)
+        df2 = df2.replace({'': np.nan, 'None': np.nan, 'null': np.nan})
+        
+        if not names:
+            return _auto_numeric_cast(df2)
+        
+        # 不足している列をNaNで追加
+        for col in names:
+            if col not in df2.columns:
+                df2[col] = np.nan
+        
+        # 指定された列順に並び替え
+        result = df2[names]
+        
+        # 数値型列を安全に処理
+        return _auto_numeric_cast(result)
+        
+    except Exception as e:
+        print(f"列の整列処理でエラー: {e}")
+        # エラーが発生した場合は元のDataFrameを返す
+        return _auto_numeric_cast(df.copy())
 
 def _predict_proba(estimator, X: pd.DataFrame) -> np.ndarray:
     X_aligned = _align_columns(X, estimator)
@@ -198,20 +240,35 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
             "used_topk": int(topk or 0),
         }
     
-    X = pd.DataFrame([features])
-    X = _normalize_single_row(X)
-    X = _restrict_to_topk(X, topk)
-    proba = _predict_proba(MODEL, X)[0]
-    pred_idx = int(np.argmax(proba))
-    pred_class = CLASSES[pred_idx]
-    decision = bool(proba[pred_idx] >= float(threshold))
-    return {
-        "pred_class": str(pred_class),
-        "proba": {str(CLASSES[i]): float(proba[i]) for i in range(len(CLASSES))},
-        "threshold": float(threshold),
-        "decision": decision,
-        "used_topk": int(topk or 0),
-    }
+    try:
+        # データを安全に処理
+        X = pd.DataFrame([features])
+        X = _normalize_single_row(X)
+        X = _restrict_to_topk(X, topk)
+        
+        # 予測実行
+        proba = _predict_proba(MODEL, X)[0]
+        pred_idx = int(np.argmax(proba))
+        pred_class = CLASSES[pred_idx]
+        decision = bool(proba[pred_idx] >= float(threshold))
+        
+        return {
+            "pred_class": str(pred_class),
+            "proba": {str(CLASSES[i]): float(proba[i]) for i in range(len(CLASSES))},
+            "threshold": float(threshold),
+            "decision": decision,
+            "used_topk": int(topk or 0),
+        }
+    except Exception as e:
+        print(f"予測処理でエラーが発生: {e}")
+        return {
+            "error": f"予測処理でエラーが発生しました: {str(e)}",
+            "pred_class": None,
+            "proba": {},
+            "threshold": float(threshold),
+            "decision": False,
+            "used_topk": int(topk or 0),
+        }
 
 def predict_df(df: pd.DataFrame, topk: Optional[int] = None):
     if MODEL is None:
@@ -316,13 +373,21 @@ def _restrict_to_topk(df: pd.DataFrame, k: Optional[int]) -> pd.DataFrame:
     out = out[all_feats]
 
     # ★ 数値列は float に強制（object落ち対策）
-    num_cols, _ = get_trained_columns()
-    existing_num = [c for c in num_cols if c in out.columns]
-    if existing_num:
-        out[existing_num] = out[existing_num].apply(
-            lambda s: pd.to_numeric(s, errors='coerce')
-        )
-    else:
+    try:
+        num_cols, _ = get_trained_columns()
+        existing_num = [c for c in num_cols if c in out.columns]
+        if existing_num:
+            for col in existing_num:
+                try:
+                    out[col] = pd.to_numeric(out[col], errors='coerce')
+                except Exception as e:
+                    print(f"列 {col} の数値変換に失敗: {e}")
+                    # 変換に失敗した場合はNaNで埋める
+                    out[col] = np.nan
+        else:
+            out = _auto_numeric_cast(out)
+    except Exception as e:
+        print(f"数値列変換処理に失敗: {e}")
         out = _auto_numeric_cast(out)
 
     return out
