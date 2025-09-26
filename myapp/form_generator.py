@@ -10,18 +10,94 @@ from pathlib import Path
 from django import forms
 import os
 
+def get_fallback_choices():
+    """CSVが読めない場合のフォールバック選択肢"""
+    return {
+        '貨物該非(1)': [
+            '該当', '対象外', '対象外(非該当)', '該当品あり', '非該当', 
+            '該当 / 非該当', '該当(3点あり)', '全て非該当(Excel参照)', 
+            '(該当品なし)', '-', '?象外'
+        ],
+        '申請パターン': [
+            '①KSS起票/製品販売(社内CA該当)',
+            '②KSS海外起票/部品販売(社内CA該当,EAR対象,該当品)',
+            '④海外申請/現地クローズ',
+            '⑤KE/海外Gr会社在庫使用',
+            '⑥-2KE/該当品(EL顧客向け)',
+            '⑥KE/該当品(KSECストック在庫を除く)',
+            '⑦KE/該当品(KSECストック在庫)',
+            '⑧KE/社内CA該当(EL顧客)',
+            '⑨KE/社内CA該当(MEU顧客)',
+            '⑪KE/役務',
+            '⑮KE/出荷パターンC向け(EAR品＋非該当)'
+        ],
+        '物流/出荷パターン7': ['-', '0', '1', '2', '3', '4', '5', 'A', 'B', 'C'],
+        '原産国(1)': [
+            '日本', 'Japan', '米国', 'USA', '中国', '韓国', 'インドネシア', 
+            'シンガポール', 'タイ', 'マレーシア', 'ドイツ', 'フランス', 
+            'イタリア', 'オランダ', '台湾', 'インド', '米国以外', 
+            '(米国製品なし)', '-'
+        ],
+        'EAR(1)': [
+            '対象外', '対象', '米国', '規制対象外', 'KSEC発送のため該当',
+            '-', '--', '―', 'ー', '対象外巣'
+        ],
+        '商流/改正特一(圧力計)1': ['-', 'E', 'a', '○', '可', '－'],
+        'ECCN(1)': [
+            'EAR99', '2B230', '2B999', '2B350', '3A999', '2B999,EAR99',
+            '2B230,2B999,EAR99', '2B230,3A999,2B999,EAR99', '2B999/EAR99(ファイル参照)',
+            '(KSEC)から出荷するためEAR99', '-', '--'
+        ],
+        '有償無償(1)': ['有償', '無償'],
+        '商流/出荷パターン1': ['-', '0', '1', '2', '3', '4', '5', 'A', 'B', 'C'],
+        '取引目的': [
+            'BO/Back Orders',
+            'KEKウェーハデモ/KEK Wafer Demonstration', 
+            'その他/Others',
+            'その他/Others（詳細は､(6)起票部署入力欄の起票部署コメントに記載してください）',
+            '不具合対応/Defect handling',
+            '技術提供/Technical Offerings',
+            '海外生産（1年間包括審査）/Production outside Japan（one year including screening）',
+            '海外生産（1年間包括審査／KEK）',
+            '海外生産（単発審査）/Production outside Japan（Single-Step Screening）',
+            '研修受入/Training Acceptance'
+        ],
+        '申請部署': [
+            '(EA)', '(EAI)', '(EAII)', '(ES)', '(F企)', '(LBM)', '(ア営)',
+            '(中営)', '(新素)', '(欧州)', '(米国)', '(韓国)', '(台湾)',
+            '(中国)', '(東南)', '(シンガ)', '(インド)'
+        ]
+    }
+
 def load_feature_analysis_data():
     """実際のCSVデータから特徴量の選択肢を分析して返す"""
     
-    # CSVファイルのパス（環境変数から取得、なければデフォルト）
-    csv_path = os.getenv('TRAINING_DATA_PATH', 
-                        '/Users/kshintani/Documents/ソフトバンク/03_CI本部/KE/007_torihiki/app_code/取引審査データ_250829_train_data.csv')
+    # 複数のCSVファイルパスを試行
+    possible_paths = [
+        # 環境変数で指定されたパス
+        os.getenv('TRAINING_DATA_PATH'),
+        # ローカル開発環境のパス
+        '/Users/kshintani/Documents/ソフトバンク/03_CI本部/KE/007_torihiki/app_code/取引審査データ_250829_train_data.csv',
+        # プロジェクトルートからの相対パス
+        str(Path(__file__).parent.parent.parent / '取引審査データ_250829_train_data.csv'),
+        # アプリ内の data フォルダ
+        str(Path(__file__).parent.parent / 'data' / 'train_data.csv'),
+    ]
     
-    try:
-        df = pd.read_csv(csv_path, low_memory=False)
-    except Exception:
-        # CSVが読めない場合のフォールバック
-        return {}
+    # 有効なパスを探して読み込み
+    for csv_path in possible_paths:
+        if csv_path and Path(csv_path).exists():
+            try:
+                print(f"CSVファイルを読み込み中: {csv_path}")
+                df = pd.read_csv(csv_path, low_memory=False)
+                break
+            except Exception as e:
+                print(f"CSVファイル読み込みエラー（{csv_path}): {e}")
+                continue
+    else:
+        print("有効なCSVファイルが見つかりません。フォールバック選択肢を使用します。")
+        # CSVが読めない場合のフォールバック：重要特徴量の既知の選択肢
+        return get_fallback_choices()
     
     # 各特徴量の選択肢を分析
     feature_choices = {}
@@ -88,6 +164,12 @@ def load_feature_analysis_data():
         unique_vals = df['取引目的'].dropna().unique()
         feature_choices['取引目的'] = sorted([str(v) for v in unique_vals if pd.notna(v)])
     
+    # データが取得できなかった場合のフォールバック
+    if not feature_choices:
+        print("CSVからの特徴量分析に失敗。フォールバック選択肢を使用します。")
+        return get_fallback_choices()
+    
+    print(f"CSVから{len(feature_choices)}個の特徴量の選択肢を取得しました。")
     return feature_choices
 
 def get_top_features(top_k=10):
@@ -139,6 +221,31 @@ def create_dynamic_form_class(top_k=10):
                     required=False
                 )
             else:  # 大きな選択肢 - 検索可能なセレクト
+                form_fields[field_name] = forms.ChoiceField(
+                    label=feature,
+                    choices=choices_with_empty,
+                    required=False,
+                    widget=forms.Select(attrs={'class': 'searchable-select'})
+                )
+        elif feature in get_fallback_choices():
+            # フォールバック選択肢を使用
+            choices = get_fallback_choices()[feature]
+            choices_with_empty = [('', '---選択してください---')] + [(c, c) for c in choices]
+            
+            if len(choices) <= 2:
+                form_fields[field_name] = forms.ChoiceField(
+                    label=feature,
+                    choices=choices_with_empty,
+                    required=False,
+                    widget=forms.RadioSelect
+                )
+            elif len(choices) <= 15:
+                form_fields[field_name] = forms.ChoiceField(
+                    label=feature,
+                    choices=choices_with_empty,
+                    required=False
+                )
+            else:
                 form_fields[field_name] = forms.ChoiceField(
                     label=feature,
                     choices=choices_with_empty,
