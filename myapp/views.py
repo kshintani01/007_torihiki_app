@@ -2,7 +2,7 @@
 from django.shortcuts import render
 from django.http import HttpResponse
 import pandas as pd
-from .forms import SinglePredictForm
+from .forms import SinglePredictForm, convert_form_data
 from .preprocess import preprocess_record, preprocess_df
 from .model_service import predict_one, predict_df
 
@@ -25,12 +25,27 @@ def single_input(request):
     if request.method == 'POST':
         form = SinglePredictForm(request.POST)
         if form.is_valid():
-            data = form.cleaned_data.copy()
+            # フォームデータを元の特徴量名に変換
+            raw_data = form.cleaned_data.copy()
+            data = convert_form_data(raw_data)
+            
             threshold = float(data.pop('threshold', 0.5))
             topk = _parse_topk(data.pop('topk', 0))
-            X = preprocess_record(data).to_dict(orient='records')[0]
+            
+            # 空文字列やNoneを適切にハンドリング
+            cleaned_data = {}
+            for key, value in data.items():
+                if value is not None and value != '':
+                    cleaned_data[key] = value
+            
+            X = preprocess_record(cleaned_data).to_dict(orient='records')[0]
             result = predict_one(X, threshold, topk=topk)
-            ctx.update({'form': form, 'result': result, 'features': X})
+            ctx.update({
+                'form': form, 
+                'result': result, 
+                'features': X,
+                'input_data': cleaned_data  # 入力データも表示用に保持
+            })
         else:
             ctx['form'] = form
     return render(request, 'myproject/single.html', ctx)

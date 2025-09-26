@@ -3,6 +3,8 @@ pandas
 scikit-learn==1.6.1
 numpy
 xgboost
+shap
+joblib
 gunicorn
 gevent
 whitenoise

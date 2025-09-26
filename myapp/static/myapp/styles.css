@@ -110,3 +110,65 @@ body {
 .hint { margin-top: 16px; color: var(--muted); }
 
 .footer { text-align: center; color: var(--muted); padding: 24px; }
+
+/* 動的フォーム用のスタイル */
+.form-section {
+  margin-bottom: 24px;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 16px;
+}
+
+.form-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+.form-section h3 {
+  margin: 0 0 16px 0;
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.form-row label {
+  font-weight: 600;
+  color: var(--text);
+  display: block;
+}
+
+.form-row input[type="radio"] {
+  width: auto;
+  margin-right: 8px;
+}
+
+.form-row .errorlist {
+  color: var(--ng);
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.error {
+  color: var(--ng);
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.input-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.input-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.input-table td:first-child {
+  background: #f9fafb;
+  font-weight: 600;
+  width: 200px;
+}
+
+.searchable-select {
+  min-height: 40px;
+}

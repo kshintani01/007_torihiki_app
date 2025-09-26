@@ -21,7 +21,7 @@ import shap
 # =========================
 CONFIG = dict(
     MODEL_PATH="models/xgb_std_pipeline.joblib",   # あなたの保存名に合わせています
-    DATA_PATH="/Users/kshintani/Documents/ソフトバンク/03_CI本部/KE/007_torihiki/007_torihiki_app/取引審査データ_250829_train_data.csv",
+    DATA_PATH="/Users/kshintani/Documents/ソフトバンク/03_CI本部/KE/007_torihiki/app_code/取引審査データ_250829_train_data.csv",
     TARGET_COL="審査結果",
     DROP_COLS=["使用許可", "許可番号", "BIS申請", "審査結果(1)", "審査結果(2)"],
     MAX_SAMPLE=2000,                                # 計算負荷対策（データが小さければ大きくして可）

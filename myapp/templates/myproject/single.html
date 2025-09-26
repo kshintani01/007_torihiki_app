@@ -17,10 +17,28 @@
 <main class="container">
 <form method="post" class="form-card">
 {% csrf_token %}
-<div class="form-row">{{ form.age.label_tag }} {{ form.age }}</div>
-<div class="form-row">{{ form.income.label_tag }} {{ form.income }}</div>
-<div class="form-row">{{ form.category.label_tag }} {{ form.category }}</div>
+
+<div class="form-section">
+<h3>重要特徴量（SHAP重要度順）</h3>
+{% for field in form %}
+  {% if field.name != 'threshold' and field.name != 'topk' %}
+  <div class="form-row">
+    {{ field.label_tag }}
+    {{ field }}
+    {% if field.errors %}
+      <div class="error">{{ field.errors }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+{% endfor %}
+</div>
+
+<div class="form-section">
+<h3>予測設定</h3>
 <div class="form-row">{{ form.threshold.label_tag }} {{ form.threshold }}</div>
+<div class="form-row">{{ form.topk.label_tag }} {{ form.topk }}</div>
+</div>
+
 <button type="submit" class="btn">予測する</button>
 </form>
 
@@ -39,9 +57,20 @@
 </p>
 
 
+{% if input_data %}
+<details class="details">
+<summary>入力データ</summary>
+<table class="input-table">
+  {% for key, value in input_data.items %}
+  <tr><td><strong>{{ key }}</strong></td><td>{{ value }}</td></tr>
+  {% endfor %}
+</table>
+</details>
+{% endif %}
+
 {% if features %}
 <details class="details">
-<summary>入力値</summary>
+<summary>前処理後の特徴量</summary>
 <pre>{{ features|safe }}</pre>
 </details>
 {% endif %}

@@ -34,13 +34,17 @@ def _download_bytes(path_in_container: str) -> bytes:
         raise FileNotFoundError(f"Blob not found: {CONTAINER}/{path_in_container}")
 
 def download_text(path_in_container: str, encoding="utf-8") -> str:
+    """テキストファイルを取得"""
     return _download_bytes(path_in_container).decode(encoding)
 
 def download_joblib_bytes(path_in_container: str) -> io.BytesIO:
+    """joblibファイルをBytesIOで取得"""
     return io.BytesIO(_download_bytes(path_in_container))
 
 def models_path(name: str) -> str:
+    """モデルファイルのパスを生成"""
     return f"{MODELS_PREFIX.strip('/')}/{name}"
 
 def config_path(name: str) -> str:
+    """設定ファイルのパスを生成"""
     return f"{CONFIG_PREFIX.strip('/')}/{name}"
