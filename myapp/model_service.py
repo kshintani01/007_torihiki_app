@@ -10,6 +10,48 @@ from typing import Optional
 def _resolve_model_blob_path() -> str:
     return os.getenv("MODEL_BLOB_PATH") or models_path("xgb_std_pipeline.joblib")
 
+def _auto_numeric_cast(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    数値らしい列を安全に float に落とす保険。
+    - 既に数値 dtype は触らない
+    - 単票（1行）の場合: そのセルが数値に変換できれば数値化
+    - 複数行の場合: 非欠損の80%以上が数値に変換できれば数値化
+    """
+    out = df.copy()
+    for c in out.columns:
+        s = out[c]
+        # 既に numeric はスキップ
+        if pd.api.types.is_numeric_dtype(s):
+            continue
+        # 文字列の空白を NaN に統一（念のため）
+        if s.dtype == "object":
+            s = s.astype(str).str.strip().replace({"": np.nan})
+        coerced = pd.to_numeric(s, errors="coerce")
+        nn = s.notna().sum()
+        if len(out) <= 1:
+            # 単票: 1セルでも数値化できれば採用
+            if coerced.notna().any():
+                out[c] = coerced
+        else:
+            # 複数行: 8割以上が数値化できるなら採用
+            if nn > 0 and (coerced.notna().sum() / nn) >= 0.8:
+                out[c] = coerced
+    return out
+
+def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
+     """
+     単票入力の 1 行 DataFrame を正規化：
+       - 空文字/空白のみの文字列は NaN
+       - Python の None も NaN
+       - np.isnan は使わず、pd.isna 系で扱う
+    """
+     # 空文字や空白だけのセルを NaN に
+     df = df.replace(r'^\s*$', np.nan, regex=True)
+     # 'None' 文字列などの紛れがあればここで追加正規化しても良い:
+     # df = df.replace({'None': np.nan, 'NULL': np.nan})
+     df = _auto_numeric_cast(df)
+     return df
+
 def _load_model_and_classes():
     try:
         blob_path = _resolve_model_blob_path()
@@ -67,12 +109,13 @@ def _align_columns(df: pd.DataFrame, estimator):
     学習時列順が分かる場合はそれに合わせる。不足列は NaN で埋める。余分列は捨てる。
     """
     names = FEATURE_NAMES_IN
-    if not names:
-        return df
     df2 = df.copy()
+    df2 = df2.replace(r'^\s*$', np.nan, regex=True)
+    if not names:
+        return _auto_numeric_cast(df2)
     for col in names:
         if col not in df2.columns:
-            df2[col] = pd.nan
+            df2[col] = np.nan
     return df2[names]
 
 def _predict_proba(estimator, X: pd.DataFrame) -> np.ndarray:
@@ -156,6 +199,7 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
         }
     
     X = pd.DataFrame([features])
+    X = _normalize_single_row(X)
     X = _restrict_to_topk(X, topk)
     proba = _predict_proba(MODEL, X)[0]
     pred_idx = int(np.argmax(proba))
@@ -177,7 +221,9 @@ def predict_df(df: pd.DataFrame, topk: Optional[int] = None):
         out["used_topk"] = int(topk or 0)
         return out
     
-    X = _restrict_to_topk(df, topk)
+    X = df.replace(r'^\s*$', np.nan, regex=True)
+    X = _auto_numeric_cast(X)
+    X = _restrict_to_topk(X, topk)
     proba = _predict_proba(MODEL, X)
     pred_idx = proba.argmax(axis=1)
     pred_class = [str(CLASSES[i]) for i in pred_idx]
@@ -256,9 +302,15 @@ def _restrict_to_topk(df: pd.DataFrame, k: Optional[int]) -> pd.DataFrame:
 
     # 最終的にモデルへ渡す列全集合を確保
     out = df.copy()
+    out = out.replace(r'^\s*$', np.nan, regex=True)
     for col in all_feats:
         if col not in out.columns:
-            out[col] = pd.nan
+            out[col] = np.nan
+    
+    # ★ 非選択の特徴量は NaN に上書きして「効かない」ようにする
+    inactive = [c for c in all_feats if c not in selected]
+    if inactive:
+        out[inactive] = np.nan
 
     # 列順は学習時に合わせる
     out = out[all_feats]
@@ -270,6 +322,8 @@ def _restrict_to_topk(df: pd.DataFrame, k: Optional[int]) -> pd.DataFrame:
         out[existing_num] = out[existing_num].apply(
             lambda s: pd.to_numeric(s, errors='coerce')
         )
+    else:
+        out = _auto_numeric_cast(out)
 
     return out
 
