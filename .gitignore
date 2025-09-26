@@ -317,3 +317,4 @@ db.sqlite3
 
 config/
 models/
+staticfiles/
