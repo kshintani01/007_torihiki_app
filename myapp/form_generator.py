@@ -206,19 +206,60 @@ def load_feature_analysis_data():
     return feature_choices
 
 def get_top_features(top_k=10):
-    """SHAP重要度から上位K個の特徴量を取得"""
+    """SHAP重要度から上位K個の特徴量を取得し、CSV列順でソート"""
     config_path = Path(__file__).parent.parent / 'config' / 'shap_feature_importance.json'
     
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             shap_data = json.load(f)
-        return [item[0] for item in shap_data['importance'][:top_k]]
+        top_features = [item[0] for item in shap_data['importance'][:top_k]]
+        
+        # CSV列順を取得
+        csv_column_order = get_csv_column_order()
+        
+        # SHAP上位特徴量をCSV列順でソート
+        ordered_features = []
+        for col in csv_column_order:
+            if col in top_features:
+                ordered_features.append(col)
+        
+        # もしCSV列順で全部埋まらなかった場合は残りを追加
+        for feature in top_features:
+            if feature not in ordered_features:
+                ordered_features.append(feature)
+                
+        return ordered_features[:top_k]
+        
     except Exception:
-        # フォールバック: デフォルトの重要特徴量
-        return [
-            '貨物該非(1)', '申請パターン', '物流/出荷パターン7', '原産国(1)', 'EAR(1)',
-            '商流/改正特一(圧力計)1', 'ECCN(1)', '最終需要者(コード)', '数量(1)', '品名(1)'
-        ]
+        # フォールバック: CSV列順での重要特徴量
+        return get_fallback_feature_order()
+
+def get_csv_column_order():
+    """CSVファイルから列の順序を取得"""
+    possible_paths = [
+        os.getenv('TRAINING_DATA_PATH'),
+        '/Users/kshintani/Documents/ソフトバンク/03_CI本部/KE/007_torihiki/app_code/取引審査データ_250829_train_data.csv',
+        str(Path(__file__).parent.parent.parent / '取引審査データ_250829_train_data.csv'),
+        str(Path(__file__).parent.parent / 'data' / 'train_data.csv'),
+    ]
+    
+    for csv_path in possible_paths:
+        if csv_path and Path(csv_path).exists():
+            try:
+                # 列名のみ取得（最初の行だけ読む）
+                df = pd.read_csv(csv_path, nrows=0)
+                return df.columns.tolist()
+            except Exception:
+                continue
+    
+    return get_fallback_feature_order()
+
+def get_fallback_feature_order():
+    """CSVが読めない場合のフォールバック特徴量順序（想定されるCSV列順）"""
+    return [
+        '貨物該非(1)', '申請パターン', '物流/出荷パターン7', '原産国(1)', 'EAR(1)',
+        '商流/改正特一(圧力計)1', 'ECCN(1)', '有償無償(1)', '商流/出荷パターン1', '取引目的'
+    ]
 
 def create_dynamic_form_class(top_k=10):
     """SHAP重要度に基づいた動的フォームクラスを生成"""
@@ -301,15 +342,7 @@ def create_dynamic_form_class(top_k=10):
                     widget=forms.TextInput(attrs={'placeholder': '入力してください'})
                 )
     
-    # 閾値とTop-K設定を追加
-    form_fields['threshold'] = forms.FloatField(
-        label='判定しきい値(0-1)',
-        min_value=0.0,
-        max_value=1.0,
-        initial=0.5,
-        required=False
-    )
-    
+    # Top-K設定を追加（閾値は内部的に0固定）
     form_fields['topk'] = forms.IntegerField(
         label='使用する特徴量の数（0=全て）',
         min_value=0,

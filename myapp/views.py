@@ -55,17 +55,9 @@ def _parse_topk(v):
     except Exception:
         return 0
     
-def _parse_threshold(v):
-    """空欄・不正値を許容しつつ 0–1 に収める"""
-    try:
-        if v is None or v == "":
-            return 0.5
-        x = float(v)
-        if x < 0.0: return 0.0
-        if x > 1.0: return 1.0
-        return x
-    except Exception:
-        return 0.5
+def _get_fixed_threshold():
+    """閾値は常に0を返す（最高確率のクラスを判定結果とする）"""
+    return 0.0
 
 def single_input(request):
     ctx = {'form': SinglePredictForm()}
@@ -76,7 +68,8 @@ def single_input(request):
             raw_data = form.cleaned_data.copy()
             data = convert_form_data(raw_data)
             
-            threshold = _parse_threshold(data.pop('threshold', None))
+            # 閾値は常に0（最高確率のクラスを判定結果とする）
+            threshold = _get_fixed_threshold()
             topk = _parse_topk(data.pop('topk', 0))
             
             # 空文字列やNoneを適切にハンドリング

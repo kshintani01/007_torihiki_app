@@ -20,14 +20,13 @@
 
 <div class="form-section">
 <h3>予測設定</h3>
-<div class="form-row">{{ form.threshold.label_tag }} {{ form.threshold }}</div>
 <div class="form-row">{{ form.topk.label_tag }} {{ form.topk }}</div>
 </div>
 
 <div class="form-section">
-<h3>重要特徴量（SHAP重要度順）</h3>
+<h3>重要特徴量（CSV列順）</h3>
 {% for field in form %}
-  {% if field.name != 'threshold' and field.name != 'topk' %}
+  {% if field.name != 'topk' %}
   <div class="form-row">
     {{ field.label_tag }}
     {{ field }}
@@ -52,8 +51,8 @@
 <span class="badge">{{ k }}: {{ v|floatformat:3 }}</span>
 {% endfor %}
 </p>
-<p><strong>判定(しきい値 {{ result.threshold }}):</strong>
-{% if result.decision %}<span class="ok">True</span>{% else %}<span class="ng">False</span>{% endif %}
+<p><strong>判定結果:</strong>
+<span class="badge">最高確率: {{ result.pred_class }}</span>
 </p>
 
 
