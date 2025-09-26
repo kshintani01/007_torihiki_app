@@ -39,9 +39,17 @@ def get_fallback_choices():
             '(米国製品なし)', '-'
         ],
         'EAR(1)': [
-            '対象外', '対象', '米国', '規制対象外', 'KSEC発送のため該当',
-            '-', '--', '―', 'ー', '対象外巣'
+            '対象外', '対象', '該当', '米国', '規制対象外', 'KSEC発送のため該当',
+            '対象外巣', '-'
         ],
+        'EAR(2)': ['対象外', '対象', '規制対象外', '該当', '-'],
+        'EAR(3)': ['対象外', '対象', '該当', '-'],
+        'EAR(4)': ['対象外', '対象', '該当', '-'],
+        'EAR(5)': ['対象外', '対象', '該当', '中国向けは対象外(米国成分25%未満)', '-'],
+        'EAR(7)': ['対象外', '対象', '該当', '-'],
+        'EAR(8)': ['対象外', '対象', '該当', '-'],
+        'EAR(9)': ['対象外', '対象', '該当', '-'],
+        'EAR(10)': ['対象外', '該当', '-'],
         '商流/改正特一(圧力計)1': ['-', 'E', 'a', '○', '可', '－'],
         'ECCN(1)': [
             'EAR99', '2B230', '2B999', '2B350', '3A999', '2B999,EAR99',
@@ -126,7 +134,32 @@ def load_feature_analysis_data():
     # EAR(1) - 分類選択
     if 'EAR(1)' in df.columns:
         unique_vals = df['EAR(1)'].dropna().unique()
-        feature_choices['EAR(1)'] = sorted([str(v) for v in unique_vals if pd.notna(v)])
+        # ダッシュのバリエーションを統一
+        normalized_vals = []
+        for v in unique_vals:
+            if pd.notna(v):
+                str_v = str(v)
+                # 複数種類のダッシュを単一の"-"に統一
+                if str_v in ['--', '―', 'ー']:
+                    str_v = '-'
+                normalized_vals.append(str_v)
+        feature_choices['EAR(1)'] = sorted(list(set(normalized_vals)))
+    
+    # EAR(2-5, 7-10) - 分類選択
+    for ear_num in [2, 3, 4, 5, 7, 8, 9, 10]:
+        ear_col = f'EAR({ear_num})'
+        if ear_col in df.columns:
+            unique_vals = df[ear_col].dropna().unique()
+            # ダッシュのバリエーションを統一
+            normalized_vals = []
+            for v in unique_vals:
+                if pd.notna(v):
+                    str_v = str(v)
+                    # 複数種類のダッシュを単一の"-"に統一
+                    if str_v in ['--', '―', 'ー']:
+                        str_v = '-'
+                    normalized_vals.append(str_v)
+            feature_choices[ear_col] = sorted(list(set(normalized_vals)))
     
     # 商流/改正特一(圧力計)1 - 小さな分類
     if '商流/改正特一(圧力計)1' in df.columns:

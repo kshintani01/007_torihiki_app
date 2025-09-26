@@ -22,7 +22,6 @@ def _final_xgb_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
     
     try:
         num_cols, cat_cols = get_trained_columns()
-        print(f"デバッグ: 最終前処理 - 数値列: {len(num_cols)}, カテゴリ列: {len(cat_cols)}")
         
         # 数値列の確実な変換
         for col in num_cols:
@@ -48,7 +47,6 @@ def _final_xgb_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
                     df_final[col] = numeric_series.astype('float64')
                     
                 except Exception as e:
-                    print(f"数値列 {col} の変換に失敗: {e}")
                     # 失敗した場合はNaNで埋める
                     df_final[col] = np.nan
                     df_final[col] = df_final[col].astype('float64')
@@ -74,30 +72,12 @@ def _final_xgb_preprocessing(df: pd.DataFrame) -> pd.DataFrame:
                         df_final[col] = series
                         
                 except Exception as e:
-                    print(f"カテゴリ列 {col} の変換に失敗: {e}")
                     # 失敗した場合はNoneで埋める
                     df_final[col] = None
-        
-        # 最終検証
-        print("デバッグ: 最終データ型検証:")
-        problematic_cols = []
-        for col in df_final.columns:
-            dtype = df_final[col].dtype
-            if col in num_cols:
-                if not pd.api.types.is_numeric_dtype(df_final[col]):
-                    problematic_cols.append(f"{col} (expected numeric, got {dtype})")
-            elif col in cat_cols:
-                if not (pd.api.types.is_string_dtype(df_final[col]) or pd.api.types.is_object_dtype(df_final[col])):
-                    if not df_final[col].isna().all():  # 全部NaNでなければ問題
-                        problematic_cols.append(f"{col} (expected string/object, got {dtype})")
-        
-        if problematic_cols:
-            print(f"警告: 型変換に問題がある列: {problematic_cols}")
         
         return df_final
         
     except Exception as e:
-        print(f"最終前処理でエラー: {e}")
         # 全て数値化を試行する最終手段
         df_emergency = df.copy()
         for col in df_emergency.columns:
@@ -200,7 +180,6 @@ def _auto_numeric_cast(df: pd.DataFrame) -> pd.DataFrame:
     - 複数行の場合: 非欠損の80%以上が数値に変換できれば数値化
     """
     out = df.copy()
-    print(f"デバッグ: auto_numeric_cast開始 - 列数: {len(out.columns)}")
     
     for c in out.columns:
         try:
@@ -209,8 +188,6 @@ def _auto_numeric_cast(df: pd.DataFrame) -> pd.DataFrame:
             # 既に numeric はスキップ
             if pd.api.types.is_numeric_dtype(s):
                 continue
-            
-            print(f"デバッグ: 列 {c} の数値変換を試行 (dtype: {s.dtype})")
             
             # 文字列の空白を NaN に統一（念のため）
             if s.dtype == "object":
@@ -230,7 +207,6 @@ def _auto_numeric_cast(df: pd.DataFrame) -> pd.DataFrame:
                 # 単票: 1セルでも数値化できれば採用
                 if coerced.notna().any():
                     out[c] = coerced
-                    print(f"デバッグ: 列 {c} を数値化しました")
                 else:
                     # 数値化できない場合は文字列として保持（ただし、NaNは適切に処理）
                     out[c] = s
@@ -238,17 +214,14 @@ def _auto_numeric_cast(df: pd.DataFrame) -> pd.DataFrame:
                 # 複数行: 8割以上が数値化できるなら採用
                 if nn > 0 and (coerced.notna().sum() / nn) >= 0.8:
                     out[c] = coerced
-                    print(f"デバッグ: 列 {c} を数値化しました")
                 else:
                     # 数値化できない場合は文字列として保持
                     out[c] = s
                     
         except Exception as e:
             # 変換に失敗した場合はNaNで埋める
-            print(f"列 {c} の数値変換に失敗: {e}")
             out[c] = np.nan
             
-    print(f"デバッグ: auto_numeric_cast完了")
     return out
 
 def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
@@ -259,8 +232,6 @@ def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
        - np.isnan は使わず、pd.isna 系で扱う
        - データ型を安全に処理
     """
-     print(f"デバッグ: 単票正規化開始 - 列数: {len(df.columns)}")
-     
      df = df.copy()
      
      # 空文字や空白だけのセルを NaN に
@@ -268,16 +239,6 @@ def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
      
      # 'None' 文字列などの紛れがあればここで追加正規化
      df = df.replace({'None': np.nan, 'NULL': np.nan, 'null': np.nan, '': np.nan})
-     
-     # 入力されている列数をチェック
-     non_null_cols = []
-     for col in df.columns:
-         if not df[col].isna().all():
-             non_null_cols.append(col)
-     
-     print(f"デバッグ: 非NaN値を持つ列: {len(non_null_cols)}個")
-     if len(non_null_cols) <= 5:
-         print(f"デバッグ: 非NaN列: {non_null_cols}")
      
      # 数値型への変換を安全に行う
      df = _auto_numeric_cast(df)
@@ -288,7 +249,6 @@ def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
              df[col] = df[col].astype(str)
              df[col] = df[col].replace({'nan': np.nan, 'None': np.nan})
      
-     print(f"デバッグ: 単票正規化完了")
      return df
 
 def _load_model_and_classes():
@@ -351,85 +311,50 @@ def _align_columns(df: pd.DataFrame, estimator):
         names = FEATURE_NAMES_IN
         df2 = df.copy()
         
-        print(f"デバッグ: 列整列開始 - 入力列数: {len(df2.columns)}")
-        
         # 空文字列をNaNに変換
         df2 = df2.replace(r'^\s*$', np.nan, regex=True)
         df2 = df2.replace({'': np.nan, 'None': np.nan, 'null': np.nan})
         
         if not names:
-            print("デバッグ: 学習時列名が不明のため、auto_numeric_castのみ実行")
             return _auto_numeric_cast(df2)
-        
-        print(f"デバッグ: 学習時列数: {len(names)}")
         
         # 不足している列を一度に追加（断片化回避）
         missing_cols = [col for col in names if col not in df2.columns]
         if missing_cols:
-            print(f"デバッグ: 不足列を追加: {len(missing_cols)}個")
             # 一度にすべての不足列を追加
             missing_data = pd.DataFrame({col: [np.nan] * len(df2) for col in missing_cols}, index=df2.index)
             df2 = pd.concat([df2, missing_data], axis=1)
         
         # 指定された列順に並び替え
         result = df2[names]
-        print(f"デバッグ: 列整列完了 - 最終列数: {len(result.columns)}")
         
         # 数値型列を安全に処理
         return _auto_numeric_cast(result)
         
     except Exception as e:
-        print(f"列の整列処理でエラー: {e}")
-        print(f"エラータイプ: {type(e).__name__}")
         # エラーが発生した場合は元のDataFrameを返す
         return _auto_numeric_cast(df.copy())
 
 def _predict_proba(estimator, X: pd.DataFrame) -> np.ndarray:
     try:
-        print(f"デバッグ: predict_proba開始 - 入力形状: {X.shape}")
-        
         X_aligned = _align_columns(X, estimator)
-        print(f"デバッグ: 列整列完了 - 形状: {X_aligned.shape}")
         
         # データ型安全性を確保
         X_safe = _ensure_data_type_safety(X_aligned)
-        print(f"デバッグ: 型安全処理完了 - 形状: {X_safe.shape}")
         
         # 最終的なデータクリーニング（XGBoost対応）
         X_safe = _final_xgb_preprocessing(X_safe)
-        print(f"デバッグ: XGB前処理完了 - 形状: {X_safe.shape}")
-        
-        # データ型の詳細確認
-        non_numeric_cols = []
-        print("デバッグ: 各列のデータ型:")
-        for col in X_safe.columns:
-            dtype = X_safe[col].dtype
-            sample_val = X_safe[col].iloc[0] if len(X_safe) > 0 else "N/A"
-            if not pd.api.types.is_numeric_dtype(X_safe[col]) and not pd.api.types.is_string_dtype(X_safe[col]):
-                non_numeric_cols.append(col)
-            print(f"  {col}: {dtype} (例: {sample_val})")
-        
-        if non_numeric_cols:
-            print(f"警告: 非数値・非文字列列: {non_numeric_cols}")
-        
-        # NaN値の確認（制限して表示）
-        nan_cols = X_safe.columns[X_safe.isna().any()].tolist()
-        if nan_cols:
-            print(f"デバッグ: NaN含有列数: {len(nan_cols)} (最初の10列: {nan_cols[:10]})")
         
         # Pipeline 経由でも predict_proba は透過的に呼べる想定
         if hasattr(estimator, "predict_proba"):
-            print("デバッグ: predict_proba実行中...")
             proba = estimator.predict_proba(X_safe)
             proba = np.asarray(proba)
-            print(f"デバッグ: predict_proba完了 - 確率形状: {proba.shape}")
             if proba.ndim == 1:  # 念のため防御
                 proba = np.vstack([1 - proba, proba]).T
             return proba
 
         # 予備: decision_function から近似
         if hasattr(estimator, "decision_function"):
-            print("デバッグ: decision_function使用")
             logits = np.asarray(estimator.decision_function(X_safe))
             if logits.ndim == 1:
                 p1 = 1.0 / (1.0 + np.exp(-logits))
@@ -440,7 +365,6 @@ def _predict_proba(estimator, X: pd.DataFrame) -> np.ndarray:
             return ez / ez.sum(axis=1, keepdims=True)
 
         # 最終手段: predict を one-hot に
-        print("デバッグ: predict使用（最終手段）")
         labels = estimator.predict(X_safe)
         classes = get_classes()  # 下の関数
         idx_map = {c: i for i, c in enumerate(classes)}
@@ -451,14 +375,9 @@ def _predict_proba(estimator, X: pd.DataFrame) -> np.ndarray:
         return proba
         
     except Exception as e:
-        print(f"予測確率計算中にエラー: {e}")
-        print(f"エラータイプ: {type(e).__name__}")
-        print(f"エラー詳細: {str(e)}")
-        
         # エラー時はダミー確率を返す
         classes = get_classes()
         uniform_proba = np.ones((len(X), len(classes))) / len(classes)
-        print(f"デバッグ: ダミー確率を返します - 形状: {uniform_proba.shape}")
         return uniform_proba
 
 def get_classes():
@@ -528,19 +447,10 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
         }
     
     try:
-        # 入力データの確認
-        print(f"デバッグ: predict_one開始 - 入力特徴量数: {len(features)}")
-        print(f"デバッグ: 入力データサンプル: {dict(list(features.items())[:5])}")
-        
         # データを安全に処理
         X = pd.DataFrame([features])
-        print(f"デバッグ: DataFrame作成完了 - 形状: {X.shape}")
-        
         X = _normalize_single_row(X)
-        print(f"デバッグ: 単票正規化完了 - 形状: {X.shape}")
-        
         X = _restrict_to_topk(X, topk)
-        print(f"デバッグ: topk制限完了 - 形状: {X.shape}")
         
         # 予測実行
         proba = _predict_proba(MODEL, X)[0]

@@ -85,12 +85,7 @@ def single_input(request):
                 if value is not None and value != '':
                     cleaned_data[key] = value
             
-            print(f"デバッグ: フォームから清理されたデータ: {len(cleaned_data)}個の特徴量")
-            print(f"デバッグ: データサンプル: {dict(list(cleaned_data.items())[:3])}")
-            
             X = preprocess_record(cleaned_data).to_dict(orient='records')[0]
-            print(f"デバッグ: preprocess_record完了: {len(X)}個の特徴量")
-            
             result = predict_one(X, threshold, topk=topk)
             ctx.update({
                 'form': form, 
