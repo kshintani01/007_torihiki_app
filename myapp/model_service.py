@@ -10,6 +10,47 @@ from typing import Optional
 def _resolve_model_blob_path() -> str:
     return os.getenv("MODEL_BLOB_PATH") or models_path("xgb_std_pipeline.joblib")
 
+def _ensure_data_type_safety(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    ML モデルへの入力前に、データ型の安全性を確保する。
+    - object型カラムは文字列として統一し、予期しない型を避ける
+    - 数値型カラムは float 型に統一
+    - すべての NaN 値を適切に処理
+    """
+    df_safe = df.copy()
+    
+    try:
+        # 各列のデータ型を安全に処理
+        for col in df_safe.columns:
+            try:
+                # 数値型の場合
+                if pd.api.types.is_numeric_dtype(df_safe[col]):
+                    # float型に統一（NaN対応）
+                    df_safe[col] = pd.to_numeric(df_safe[col], errors='coerce')
+                else:
+                    # object型の場合は文字列として統一
+                    df_safe[col] = df_safe[col].astype(str)
+                    # 'nan'文字列をNaNに変換
+                    df_safe[col] = df_safe[col].replace({'nan': np.nan, 'None': np.nan, 'null': np.nan})
+                    
+                    # 数値変換を試行
+                    numeric_series = pd.to_numeric(df_safe[col], errors='coerce')
+                    # 数値変換が可能な場合は数値型に
+                    if not numeric_series.isna().all():
+                        df_safe[col] = numeric_series
+                        
+            except Exception as col_error:
+                print(f"列 {col} の型安全処理に失敗: {col_error}")
+                # 失敗した場合はNaNで埋める
+                df_safe[col] = np.nan
+                
+        return df_safe
+        
+    except Exception as e:
+        print(f"データ型安全処理に失敗: {e}")
+        # 全体的に失敗した場合は元のDataFrameを返す
+        return df.copy()
+
 def _auto_numeric_cast(df: pd.DataFrame) -> pd.DataFrame:
     """
     数値らしい列を安全に float に落とす保険。
@@ -161,35 +202,46 @@ def _align_columns(df: pd.DataFrame, estimator):
         return _auto_numeric_cast(df.copy())
 
 def _predict_proba(estimator, X: pd.DataFrame) -> np.ndarray:
-    X_aligned = _align_columns(X, estimator)
-    # Pipeline 経由でも predict_proba は透過的に呼べる想定
-    if hasattr(estimator, "predict_proba"):
-        proba = estimator.predict_proba(X_aligned)
-        proba = np.asarray(proba)
-        if proba.ndim == 1:  # 念のため防御
-            proba = np.vstack([1 - proba, proba]).T
+    try:
+        X_aligned = _align_columns(X, estimator)
+        
+        # データ型安全性を確保
+        X_safe = _ensure_data_type_safety(X_aligned)
+        
+        # Pipeline 経由でも predict_proba は透過的に呼べる想定
+        if hasattr(estimator, "predict_proba"):
+            proba = estimator.predict_proba(X_safe)
+            proba = np.asarray(proba)
+            if proba.ndim == 1:  # 念のため防御
+                proba = np.vstack([1 - proba, proba]).T
+            return proba
+
+        # 予備: decision_function から近似
+        if hasattr(estimator, "decision_function"):
+            logits = np.asarray(estimator.decision_function(X_safe))
+            if logits.ndim == 1:
+                p1 = 1.0 / (1.0 + np.exp(-logits))
+                p0 = 1.0 - p1
+                return np.vstack([p0, p1]).T
+            z = logits - logits.max(axis=1, keepdims=True)
+            ez = np.exp(z)
+            return ez / ez.sum(axis=1, keepdims=True)
+
+        # 最終手段: predict を one-hot に
+        labels = estimator.predict(X_safe)
+        classes = get_classes()  # 下の関数
+        idx_map = {c: i for i, c in enumerate(classes)}
+        proba = np.zeros((len(labels), len(classes)), dtype=float)
+        for r, lab in enumerate(labels):
+            j = idx_map.get(lab, 0)
+            proba[r, j] = 1.0
         return proba
-
-    # 予備: decision_function から近似
-    if hasattr(estimator, "decision_function"):
-        logits = np.asarray(estimator.decision_function(X_aligned))
-        if logits.ndim == 1:
-            p1 = 1.0 / (1.0 + np.exp(-logits))
-            p0 = 1.0 - p1
-            return np.vstack([p0, p1]).T
-        z = logits - logits.max(axis=1, keepdims=True)
-        ez = np.exp(z)
-        return ez / ez.sum(axis=1, keepdims=True)
-
-    # 最終手段: predict を one-hot に
-    labels = estimator.predict(X_aligned)
-    classes = get_classes()  # 下の関数
-    idx_map = {c: i for i, c in enumerate(classes)}
-    proba = np.zeros((len(labels), len(classes)), dtype=float)
-    for r, lab in enumerate(labels):
-        j = idx_map.get(lab, 0)
-        proba[r, j] = 1.0
-    return proba
+        
+    except Exception as e:
+        print(f"予測確率計算中にエラー: {e}")
+        # エラー時はダミー確率を返す
+        classes = get_classes()
+        return np.ones((len(X), len(classes))) / len(classes)
 
 def get_classes():
     """
@@ -198,33 +250,50 @@ def get_classes():
     - 次点: 推定器の classes_（整数など）
     - どれも無ければ 0..C-1
     """
-    # モデルが利用できない場合のデフォルト
-    if MODEL is None:
-        return np.array(["不明"])
-    
-    # 1) 保存済みのラベル名（推奨）
-    if SAVED_CLASSES is not None and len(SAVED_CLASSES) > 0:
-        return np.array(SAVED_CLASSES)
-
-    # 2) 推定器 / 最終推定器の classes_
-    if hasattr(MODEL, "classes_"):
-        return np.array(MODEL.classes_)
-    if hasattr(MODEL, "steps"):
-        try:
-            last_est = MODEL.steps[-1][1]
-            if hasattr(last_est, "classes_"):
-                return np.array(last_est.classes_)
-        except Exception:
-            pass
-
-    # 3) どうしても無い場合（通常は来ない）
-    # ここに来た場合は、predict_proba 実行時の列数から作る
     try:
-        dummy = pd.DataFrame([{}])
-        proba = _predict_proba(MODEL, dummy)
-        C = proba.shape[1]
-        return np.arange(C)
-    except:
+        # モデルが利用できない場合のデフォルト
+        if MODEL is None:
+            return np.array(["不明"])
+        
+        # 1) 保存済みのラベル名（推奨）
+        if SAVED_CLASSES is not None and len(SAVED_CLASSES) > 0:
+            # Noneや無効な値を除外
+            valid_classes = [cls for cls in SAVED_CLASSES if cls is not None and str(cls).strip() != '']
+            if valid_classes:
+                return np.array(valid_classes)
+
+        # 2) 推定器 / 最終推定器の classes_
+        if hasattr(MODEL, "classes_"):
+            classes = MODEL.classes_
+            # Noneや無効な値を除外
+            valid_classes = [cls for cls in classes if cls is not None and str(cls).strip() != '']
+            if valid_classes:
+                return np.array(valid_classes)
+                
+        if hasattr(MODEL, "steps"):
+            try:
+                last_est = MODEL.steps[-1][1]
+                if hasattr(last_est, "classes_"):
+                    classes = last_est.classes_
+                    # Noneや無効な値を除外
+                    valid_classes = [cls for cls in classes if cls is not None and str(cls).strip() != '']
+                    if valid_classes:
+                        return np.array(valid_classes)
+            except Exception:
+                pass
+
+        # 3) どうしても無い場合（通常は来ない）
+        # ここに来た場合は、predict_proba 実行時の列数から作る
+        try:
+            dummy = pd.DataFrame([{}])
+            proba = _predict_proba(MODEL, dummy)
+            C = proba.shape[1]
+            return np.array([f"クラス{i}" for i in range(C)])
+        except:
+            return np.array(["不明"])
+            
+    except Exception as e:
+        print(f"クラス取得でエラー: {e}")
         return np.array(["不明"])
 
 CLASSES = get_classes()
@@ -248,13 +317,33 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
         
         # 予測実行
         proba = _predict_proba(MODEL, X)[0]
+        
+        # 予測結果の安全性を確保
+        if len(proba) == 0 or not np.isfinite(proba).all():
+            raise ValueError("予測確率が無効です")
+            
         pred_idx = int(np.argmax(proba))
-        pred_class = CLASSES[pred_idx]
+        
+        # クラス名の安全性を確保
+        if pred_idx < len(CLASSES):
+            pred_class = CLASSES[pred_idx]
+            if pred_class is None or str(pred_class).strip() == '':
+                pred_class = f"クラス{pred_idx}"
+        else:
+            pred_class = f"クラス{pred_idx}"
+        
         decision = bool(proba[pred_idx] >= float(threshold))
+        
+        # 確率辞書を安全に作成
+        proba_dict = {}
+        for i, cls in enumerate(CLASSES):
+            if i < len(proba):
+                cls_name = str(cls) if cls is not None and str(cls).strip() != '' else f"クラス{i}"
+                proba_dict[cls_name] = float(proba[i])
         
         return {
             "pred_class": str(pred_class),
-            "proba": {str(CLASSES[i]): float(proba[i]) for i in range(len(CLASSES))},
+            "proba": proba_dict,
             "threshold": float(threshold),
             "decision": decision,
             "used_topk": int(topk or 0),
@@ -352,43 +441,55 @@ def _restrict_to_topk(df: pd.DataFrame, k: Optional[int]) -> pd.DataFrame:
         # 何もしない
         return df
 
-    ordered = _load_shap_ordered_features()
-    all_feats = get_required_features()
-    # 実在しない列名は除外しておく
-    selected = [c for c in ordered if c in all_feats][:k]
-
-    # 最終的にモデルへ渡す列全集合を確保
-    out = df.copy()
-    out = out.replace(r'^\s*$', np.nan, regex=True)
-    for col in all_feats:
-        if col not in out.columns:
-            out[col] = np.nan
-    
-    # ★ 非選択の特徴量は NaN に上書きして「効かない」ようにする
-    inactive = [c for c in all_feats if c not in selected]
-    if inactive:
-        out[inactive] = np.nan
-
-    # 列順は学習時に合わせる
-    out = out[all_feats]
-
-    # ★ 数値列は float に強制（object落ち対策）
     try:
-        num_cols, _ = get_trained_columns()
-        existing_num = [c for c in num_cols if c in out.columns]
-        if existing_num:
-            for col in existing_num:
-                try:
-                    out[col] = pd.to_numeric(out[col], errors='coerce')
-                except Exception as e:
-                    print(f"列 {col} の数値変換に失敗: {e}")
-                    # 変換に失敗した場合はNaNで埋める
-                    out[col] = np.nan
-        else:
-            out = _auto_numeric_cast(out)
-    except Exception as e:
-        print(f"数値列変換処理に失敗: {e}")
-        out = _auto_numeric_cast(out)
+        ordered = _load_shap_ordered_features()
+        all_feats = get_required_features()
+        # 実在しない列名は除外しておく
+        selected = [c for c in ordered if c in all_feats][:k]
 
-    return out
+        # 最終的にモデルへ渡す列全集合を確保（断片化を避けるため一度に作成）
+        out = df.copy()
+        out = out.replace(r'^\s*$', np.nan, regex=True)
+        
+        # 不足している列を一度に追加（断片化回避）
+        missing_cols = [col for col in all_feats if col not in out.columns]
+        if missing_cols:
+            # 一度にすべての不足列を追加
+            missing_data = pd.DataFrame({col: [np.nan] * len(out) for col in missing_cols}, index=out.index)
+            out = pd.concat([out, missing_data], axis=1)
+        
+        # ★ 非選択の特徴量は NaN に上書きして「効かない」ようにする
+        inactive = [c for c in all_feats if c not in selected]
+        if inactive:
+            out[inactive] = np.nan
+
+        # 列順は学習時に合わせる
+        out = out[all_feats]
+
+        # ★ 数値列は float に強制（object落ち対策） - 効率的に処理
+        try:
+            num_cols, _ = get_trained_columns()
+            existing_num = [c for c in num_cols if c in out.columns]
+            if existing_num:
+                # 一度にすべての数値列を変換
+                for col in existing_num:
+                    try:
+                        out.loc[:, col] = pd.to_numeric(out[col], errors='coerce')
+                    except Exception as e:
+                        print(f"列 {col} の数値変換に失敗: {e}")
+                        # 変換に失敗した場合はNaNで埋める
+                        out.loc[:, col] = np.nan
+            else:
+                out = _auto_numeric_cast(out)
+        except Exception as e:
+            print(f"数値列変換処理に失敗: {e}")
+            out = _auto_numeric_cast(out)
+
+        # DataFrame を最終的にデフラグメント
+        return out.copy()
+        
+    except Exception as e:
+        print(f"topk制限処理でエラー: {e}")
+        # エラー時は元のDataFrameを返す
+        return _auto_numeric_cast(df.copy())
 
