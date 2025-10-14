@@ -5,7 +5,7 @@ import pandas as pd
 import joblib
 from django.conf import settings
 from .services.blob_store import download_joblib_bytes, download_text, models_path, config_path
-from .services.aml_endpoint import aml_enabled, score_via_aml, aml_enabled_reason
+from .services.aml_endpoint import aml_enabled, score_via_aml, aml_enabled_reason, score_df_in_batches
 from typing import Optional 
 from .preprocess import preprocess_df
 
@@ -597,27 +597,40 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
     """
     # --- 1) Azure ML endpoint を試す ---
     if aml_enabled():
-        try:
-            scored, meta = score_via_aml(df)
-            # ★ AMLで失敗した行だけ（pred_class が欠損）をローカルで補完
-            if "pred_class" in scored.columns and scored["pred_class"].isna().any():
-                miss_idx = scored.index[scored["pred_class"].isna()].tolist()
-                if miss_idx:
-                    print(f"[SCORER] {len(miss_idx)} rows fell back to local (per-row).")
-                    sub = df.iloc[miss_idx]
-                    pre = preprocess_df(sub)
-                    aligned = _apply_topk_and_align(pre, topk=topk)
-                    proba = _predict_proba(MODEL, aligned)
-                    classes = get_classes()
-                    best = proba.argmax(axis=1)
-                    scored.loc[miss_idx, "pred_class"] = [classes[i] for i in best]
-                    # used_scorer を行単位で上書き
-                    if "used_scorer" not in scored.columns:
-                        scored["used_scorer"] = "aml"
-                    scored.loc[miss_idx, "used_scorer"] = "local"
-            return scored
-        except Exception as e:
-            print(f"[WARN] AML scoring failed -> fallback to local: {e}")
+        out_parts = []
+        for sl, aml_scored, err in score_df_in_batches(df):
+            if err is None and aml_scored is not None:
+                if isinstance(aml_scored, tuple):
+                    aml_scored = aml_scored[0]
+                part = aml_scored.copy()
+                try:
+                    if len(part) == (sl.stop - sl.start):
+                        part.index = range(sl.start, sl.stop)
+                except Exception:
+                    pass
+                if "used_scorer" not in part.columns:
+                    part["used_scorer"] = "aml"
+                out_parts.append(part)
+            else:
+                sub = df.iloc[sl]
+                pre = preprocess_df(sub)
+                aligned = _apply_topk_and_align(pre, topk=topk)
+                proba = _predict_proba(MODEL, aligned)
+                classes = get_classes()
+                best = proba.argmax(axis=1)
+                part = sub.copy()
+                try:
+                    part.index = range(sl.start, sl.stop)
+                except Exception:
+                    pass
+                part["pred_class"] = [classes[i] for i in best]
+                for j, c in enumerate(classes):
+                    part[f"pred_prob_{c}"] = proba[:, j]
+                part["used_scorer"] = "local"
+                out_parts.append(part)
+        if out_parts:
+            out = pd.concat(out_parts, axis=0).sort_index(kind="mergesort").reset_index(drop=True)
+            return out
 
     # --- 2) 従来のローカルパイプラインで推論 ---
     try:

@@ -3,13 +3,24 @@ import os, json, uuid
 import pandas as pd
 import numpy as np
 import requests
-from typing import List, Tuple, Optional
+from typing import Iterator, List, Tuple, Optional
+import warnings as _warnings
 
 # --- optional: AAD ---
 try:
     from azure.identity import DefaultAzureCredential
 except Exception:
     DefaultAzureCredential = None
+
+_warnings.filterwarnings(
+    "ignore",
+    message="Downcasting behavior in `replace` is deprecated",
+    category=FutureWarning,
+)
+
+class AMLHTTPError(RuntimeError):
+    """HTTP レイヤ由来（AML スコアリングエンドポイントのエラー）"""
+    pass
 
 # =============== 環境変数ヘルパ & デバッグ/バッチ設定 ===============
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -178,9 +189,10 @@ def _parse_response(obj: dict) -> Tuple[Optional[List[str]], Optional[np.ndarray
             p0 = preds[0]
             if isinstance(p0, dict):
                 classes = p0.get("labels") or p0.get("classes")
-                scores = p0.get("score") or p0.get("probabilities")
-                if classes and scores is not None:
-                    return classes, np.ndarray(scores, dtype=float), None
+                # 一部実装は "scores" / "score" / "probabilities" のいずれか
+                scores = p0.get("scores") or p0.get("score") or p0.get("probabilities")
+                if classes and (scores is not None):
+                    return classes, np.array(scores, dtype=float), None
     
 
     # 3) {"labels":[...], "scores":[[...]]}
@@ -267,12 +279,28 @@ def _score_or_split(scoring_uri: str,
         right = _score_or_split(scoring_uri, part_in.iloc[mid:], part_src.iloc[mid:], auth_mode, api_key, timeout)
         return pd.concat([left, right], axis=0, ignore_index=True)
 
+def _score_once(scoring_uri: str,
+                shaped: pd.DataFrame,
+                src_df: pd.DataFrame,
+                auth_mode: str,
+                api_key: Optional[str],
+                timeout: int) -> pd.DataFrame:
+    """
+    そのまま一発だけ送って結果を返す。失敗時は例外を上へ送る（※内部でローカル補完しない）。
+    """
+    obj = _score_chunk(scoring_uri, shaped, auth_mode, api_key, timeout)
+    classes, proba, labels = _parse_response(obj)
+    return _to_output_df(src_df, classes, proba, labels)
+
 # =============== 公開エントリポイント ===============
-def score_via_aml(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
+def score_via_aml(df: pd.DataFrame, *, allow_internal_chunk: bool = True, allow_local_fallback: bool = True, **kwargs,) -> Tuple[pd.DataFrame, dict]:
     """
     df を AML に送り、pred_class（＋必要に応じて pred_prob_*）列を付与して返す。
     例外は上位で捕捉し、ローカル推論にフォールバックさせることを想定。
     """
+    if "allow_internal_chunk" in kwargs:
+        allow_internal_chunk = bool(kwargs["allow_internal_chunk"])
+
     reason = aml_enabled_reason()
     if reason:
         raise RuntimeError(f"AML disabled: {reason}")
@@ -305,6 +333,13 @@ def score_via_aml(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     shaped_all = _apply_null_policy(shaped_all, expected_cols)
 
     # バッチ無効 or 行数が少なければ一発送信
+    if not allow_internal_chunk and not allow_local_fallback:
+        if allow_internal_chunk:
+            out = _score_or_split(scoring_uri, shaped_all, df, auth_mode, api_key, timeout)
+        else:
+            out = _score_once(scoring_uri, shaped_all, df, auth_mode, api_key, timeout)
+        return out.assign(used_scorer="aml"), {"used": "aml", "endpoint": scoring_uri}
+
     batch = AML_BATCH_ROWS
     outs: List[pd.DataFrame] = []
     if not batch or batch <= 0:
@@ -314,9 +349,68 @@ def score_via_aml(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     for start in range(0, len(shaped_all), batch):
         part_in  = shaped_all.iloc[start:start+batch]
         part_src = df.iloc[start:start+batch]  # 元の見た目で返したいので元DFで out を作る
-        part_out = _score_or_split(scoring_uri, part_in, part_src, auth_mode, api_key, timeout)
+        if allow_internal_chunk:
+            part_out = _score_or_split(scoring_uri, part_in, part_src, auth_mode, api_key, timeout)
+        else:
+            part_out = _score_once(scoring_uri, part_in, part_src, auth_mode, api_key, timeout)
         outs.append(part_out)
 
     merged = pd.concat(outs, axis=0, ignore_index=True)
     merged["used_scorer"] = "aml"
     return merged, {"used": "aml", "endpoint": scoring_uri}
+
+def get_batch_rows() -> int:
+    """AML_BATCH_ROWS（未設定時は16）"""
+    try:
+        return int(os.getenv("AML_BATCH_ROWS", "16"))
+    except Exception:
+        return 16
+
+def is_fast_fail_enabled() -> bool:
+    """AML_FAST_FAIL（'1'/'true' で有効、既定は有効）"""
+    v = os.getenv("AML_FAST_FAIL", "1").lower()
+    return v in ("1", "true", "yes", "on")
+
+def score_df_in_batches(
+    df: pd.DataFrame,
+    batch_rows: Optional[int] = None,
+    fast_fail: Optional[bool] = None,
+) -> Iterator[Tuple[slice, Optional[pd.DataFrame], Optional[Exception]]]:
+    """
+    df をバッチに分けて AML で推論する。
+    - 成功時: (slice, scored_df, None)
+    - 失敗時: (slice, None, err)
+    fast_fail=True のとき最初の失敗以降は以後のバッチを AML に投げず打ち切る。
+    """
+    n = len(df)
+    if n == 0:
+        return
+    bsz = batch_rows or get_batch_rows()
+    ff = is_fast_fail_enabled() if fast_fail is None else fast_fail
+
+    start = 0
+    seen_error = False
+    while start < n:
+        end = min(start + bsz, n)
+        sl = slice(start, end)
+        batch = df.iloc[sl]
+
+        if seen_error and ff:
+            # fast-fail: 以降のバッチは AML を試さずスキップ
+            yield (sl, None, RuntimeError("fast-fail: skipped AML after earlier failure"))
+            start = end
+            continue
+
+        try:
+            result = score_via_aml(batch, allow_internal_chunk=False, allow_local_fallback=False)
+            if isinstance(result, tuple):
+                scored = result[0]
+            else:
+                scored = result
+            if not isinstance(scored, pd.DataFrame):
+                raise TypeError(f"AML returned non-DataFrame: {type(scored)}")
+            yield (sl, scored, None)
+        except Exception as e:
+            seen_error = True
+            yield (sl, None, e)
+        start = end
