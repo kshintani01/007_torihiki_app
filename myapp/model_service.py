@@ -1,11 +1,30 @@
 # predictor/model_service.py
-import os, io, json, joblib
+import os, io, json, joblib, logging
 import numpy as np
 import pandas as pd
 import joblib
 from django.conf import settings
 from .services.blob_store import download_joblib_bytes, download_text, models_path, config_path
+from .services.aml_endpoint import aml_enabled, score_via_aml, aml_enabled_reason
 from typing import Optional 
+from .preprocess import preprocess_df
+
+logger = logging.getLogger(__name__)
+
+LAST_SCORER_META = {"used": None, "detail": None}
+
+MODEL_SOURCE = None
+
+def _log_aml_status_on_startup():
+    reason = aml_enabled_reason()
+    if reason:
+        print(f"[AML] disabled on startup: {reason}")
+        logger.info(f"[AML] disabled on startup: {reason}")
+    else:
+        print(f"[AML] enabled on startup: endpoint={os.getenv('AML_SCORING_URI')}")
+        logger.info(f"[AML] enabled on startup: endpoint={os.getenv('AML_SCORING_URI')}")
+        
+_log_aml_status_on_startup()
 
 def _resolve_model_blob_path() -> str:
     return os.getenv("MODEL_BLOB_PATH") or models_path("xgb_std_pipeline.joblib")
@@ -254,8 +273,15 @@ def _normalize_single_row(df: pd.DataFrame) -> pd.DataFrame:
 def _load_model_and_classes():
     try:
         blob_path = _resolve_model_blob_path()
+        
+        global MODEL_SOURCE
+        MODEL_SOURCE = f"blob:{blob_path}"
+
         bio = download_joblib_bytes(blob_path)
         obj = joblib.load(bio)
+
+        print(f"[MODEL] Loaded model from {MODEL_SOURCE}")
+        logger.info(f"[MODEL] Loaded model from {MODEL_SOURCE}")
 
         # A) dict 形式（あなたの train スクリプトの保存形式）
         if isinstance(obj, dict):
@@ -496,26 +522,150 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
             "used_topk": int(topk or 0),
         }
 
-def predict_df(df: pd.DataFrame, topk: Optional[int] = None):
-    if MODEL is None:
-        out = df.copy()
-        out["pred_class"] = "モデル利用不可"
-        out["error"] = "モデルが利用できません"
-        out["used_topk"] = int(topk or 0)
+
+def _get_trained_columns_from_pipeline(pipeline) -> tuple[list[str], list[str]]:
+    """
+    学習時パイプライン（ColumnTransformer 'prep'）から数値/カテゴリ列を取り出す。
+    - 'prep' → transformers_ から name 'num' / 'cat' を探す前提
+    """
+    # Pipeline から 'prep'（ColumnTransformer）を取得
+    try:
+        prep = pipeline.named_steps["prep"]
+    except Exception as e:
+        raise RuntimeError("学習済みパイプラインに 'prep' が見つかりません。") from e
+
+    num_cols, cat_cols = [], []
+    for name, trans, cols in getattr(prep, "transformers_", []):
+        if name == "num":
+            num_cols = list(cols)
+        elif name == "cat":
+            cat_cols = list(cols)
+    if not (num_cols or cat_cols):
+        # transformers_ から取れない場合のフォールバック: feature_names_in_
+        fn = getattr(pipeline, "feature_names_in_", None)
+        if fn is not None:
+            return list(fn), []
+        raise RuntimeError("数値/カテゴリ列の抽出に失敗しました。'num'/'cat' の命名を確認してください。")
+    return num_cols, cat_cols
+
+
+def _apply_topk_and_align(df: pd.DataFrame, topk: int, pipeline=None) -> pd.DataFrame:
+    """
+    - SHAPの重要度順 Top-K 指定があれば、そのK列以外を NaN で無効化（列自体は残す）
+    - 学習時の列順（num→cat）に揃え、不足列は NaN で補完、余計な列は送らない
+    """
+    if pipeline is None:
+        pipeline = MODEL
+        if pipeline is None:
+            pipeline, _ = _load_model_and_classes()
+
+    num_cols, cat_cols = _get_trained_columns_from_pipeline(pipeline)
+    full_cols = list(num_cols) + list(cat_cols)
+
+    shaped = df.copy()
+
+    # --- Top-K: 重要度順の上位K以外を NaN に（K<=0 ならスキップ）
+    if topk and topk > 0:
+        ordered = _load_shap_ordered_features() or []
+        allow = set(ordered[:topk]) if ordered else set()
+        if allow:
+            for c in full_cols:
+                if c in shaped.columns and c not in allow:
+                    shaped[c] = np.nan  # 列は残すが無効化
+
+    # --- 列そろえ: 不足列は NaN、順序を学習時の列順に固定、余計は送らない
+    for c in full_cols:
+        if c not in shaped.columns:
+            shaped[c] = np.nan
+    shaped = shaped[full_cols]
+
+    # --- dtype の最低限の安全化: 数値列は float64, 文字列は object
+    for c in num_cols:
+        if c in shaped.columns:
+            shaped[c] = pd.to_numeric(shaped[c], errors="coerce").astype("float64")
+    for c in cat_cols:
+        if c in shaped.columns:
+            # None/NaN はそのまま、値は str 化
+            shaped[c] = shaped[c].where(shaped[c].isna(), shaped[c].astype("object"))
+
+    return shaped
+
+def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
+    """
+    先に AML を試し、ダメならローカルで推論する。
+    戻り値: pred_class / pred_prob_* / used_scorer 列を付与した DataFrame
+    """
+    # --- 1) Azure ML endpoint を試す ---
+    if aml_enabled():
+        try:
+            scored, meta = score_via_aml(df)
+            # ★ AMLで失敗した行だけ（pred_class が欠損）をローカルで補完
+            if "pred_class" in scored.columns and scored["pred_class"].isna().any():
+                miss_idx = scored.index[scored["pred_class"].isna()].tolist()
+                if miss_idx:
+                    print(f"[SCORER] {len(miss_idx)} rows fell back to local (per-row).")
+                    sub = df.iloc[miss_idx]
+                    pre = preprocess_df(sub)
+                    aligned = _apply_topk_and_align(pre, topk=topk)
+                    proba = _predict_proba(MODEL, aligned)
+                    classes = get_classes()
+                    best = proba.argmax(axis=1)
+                    scored.loc[miss_idx, "pred_class"] = [classes[i] for i in best]
+                    # used_scorer を行単位で上書き
+                    if "used_scorer" not in scored.columns:
+                        scored["used_scorer"] = "aml"
+                    scored.loc[miss_idx, "used_scorer"] = "local"
+            return scored
+        except Exception as e:
+            print(f"[WARN] AML scoring failed -> fallback to local: {e}")
+
+    # --- 2) 従来のローカルパイプラインで推論 ---
+    try:
+        pre = preprocess_df(df)  # 既存: 文字列正規化/数値キャスト等
+        aligned = _apply_topk_and_align(pre, topk=topk)  # 既存: Top-K→列揃え
+
+        proba = _predict_proba(MODEL, aligned)
+        classes = get_classes()
+        
+        best = proba.argmax(axis=1)
+        out = df.copy().reset_index(drop=True)
+        out["pred_class"] = [classes[i] for i in best]
+        for j, c in enumerate(classes):
+            out[f"pred_prob_{c}"] = proba[:, j]
+        out["used_scorer"] = "local"
+        src = MODEL_SOURCE or "local:model"
+        print(f"[SCORER] Used: Local model -> {src}")
+        logger.info(f"[SCORER] Used: Local model -> {src}")
+        LAST_SCORER_META.update({"used": "local", "detail": src})
+
         return out
     
-    X = df.replace(r'^\s*$', np.nan, regex=True)
-    X = _auto_numeric_cast(X)
-    X = _restrict_to_topk(X, topk)
-    proba = _predict_proba(MODEL, X)
-    pred_idx = proba.argmax(axis=1)
-    pred_class = [str(CLASSES[i]) for i in pred_idx]
-    out = df.copy()
-    out["pred_class"] = pred_class
-    for i, c in enumerate(CLASSES):
-        out[f"pred_prob_{c}"] = proba[:, i]
-    out["used_topk"] = int(topk or 0)
-    return out
+    except Exception as e:
+        out = df.copy().reset_index(drop=True)
+        out["pred_class"] = "モデル利用不可"
+        out["error"] = str(e)
+        out["used_scorer"] = "error"
+
+        err = f"[SCORER] Error during local scoring: {e}"
+        print(err)
+        logger.error(err)
+        LAST_SCORER_META.update({"used": "error", "detail": str(e)})
+
+        return out
+    
+def predict_one(record: dict, topk: int = 0) -> dict:
+    """
+    1件版。内部的には DataFrame 化して predict_df に委譲。
+    """
+    df = pd.DataFrame([record])
+    res = predict_df(df, topk=topk)
+    row = res.iloc[0]
+    proba = {k.replace("pred_prob_", ""): float(row[k]) for k in res.columns if k.startswith("pred_prob_")}
+    return {
+        "pred_class": row.get("pred_class"),
+        "proba": proba or None,
+        "used_scorer": row.get("used_scorer")
+    }
 
 
 def get_trained_columns():
@@ -629,4 +779,3 @@ def _restrict_to_topk(df: pd.DataFrame, k: Optional[int]) -> pd.DataFrame:
         print(f"topk制限処理でエラー: {e}")
         # エラー時は元のDataFrameを返す
         return _auto_numeric_cast(df.copy())
-

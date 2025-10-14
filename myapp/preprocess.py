@@ -1,7 +1,14 @@
 # predictor/preprocess.py
 import numpy as np
 import pandas as pd
-from .model_service import get_trained_columns
+
+def _get_trained_columns_lazy():
+    try:
+        from .model_service import get_trained_columns as _gtc
+        num_cols, cat_cols = _gtc()
+        return list(num_cols), list(cat_cols)
+    except Exception:
+        return [], []
 
 def _strip_strings(df: pd.DataFrame) -> pd.DataFrame:
     """全 object 列: 前後空白を除去、空文字は NaN に。"""
@@ -25,7 +32,7 @@ def _to_numeric_like_series(s: pd.Series) -> pd.Series:
 def _apply_numeric_cast_for_trained_num_cols(df: pd.DataFrame) -> pd.DataFrame:
     """学習時に『数値』として扱われた列にだけ、数値化処理を適用。"""
     df = df.copy()
-    num_cols, _ = get_trained_columns()
+    num_cols, _ = _get_trained_columns_lazy()
     for c in num_cols:
         if c in df.columns:
             df[c] = _to_numeric_like_series(df[c])
