@@ -55,9 +55,7 @@ def _parse_topk(v):
     except Exception:
         return 0
     
-def _get_fixed_threshold():
-    """閾値は常に0を返す（最高確率のクラスを判定結果とする）"""
-    return 0.0
+# 閾値機能は削除（確率出力機能削除に伴い不要）
 
 def single_input(request):
     ctx = {'form': SinglePredictForm()}
@@ -68,8 +66,7 @@ def single_input(request):
             raw_data = form.cleaned_data.copy()
             data = convert_form_data(raw_data)
             
-            # 閾値は常に0（最高確率のクラスを判定結果とする）
-            threshold = _get_fixed_threshold()
+            # 閾値機能削除（確率出力機能削除に伴い不要）
             topk = _parse_topk(data.pop('topk', 0))
             
             # 空文字列やNoneを適切にハンドリング
@@ -79,7 +76,7 @@ def single_input(request):
                     cleaned_data[key] = value
             
             X = preprocess_record(cleaned_data).to_dict(orient='records')[0]
-            result = predict_one(X, threshold, topk=topk)
+            result = predict_one(X, topk=topk)
             ctx.update({
                 'form': form, 
                 'result': result, 

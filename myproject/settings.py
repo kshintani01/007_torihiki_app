@@ -9,12 +9,47 @@ SECRET_KEY = "h4cf#n=iz+#u*!bdaps2%andk!tu(o1lnc@w76ok=_nkfr4xx7"
 # 環境変数からDEBUGモードを設定（デフォルトはFalse）
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('true', '1', 'yes')
 
+# 本番環境では環境変数からシークレットキーを取得
+if not DEBUG:
+    SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', SECRET_KEY)
+
+# ALLOWED_HOSTSの設定（環境変数からも読み込み可能）
 ALLOWED_HOSTS = [
     "sb-torihiki01.azurewebsites.net",
     "localhost", 
     "127.0.0.1",
-    "*",  # Azure App Service用（本番では特定ドメインのみ推奨）
 ]
+
+# 環境変数からの追加ホスト設定
+additional_hosts = os.environ.get('DJANGO_ALLOWED_HOSTS', '')
+if additional_hosts:
+    ALLOWED_HOSTS.extend([host.strip() for host in additional_hosts.split(',') if host.strip()])
+
+# 開発環境では全ホストを許可
+if DEBUG:
+    ALLOWED_HOSTS.append("*")
+
+# Azure App Service用のCSRF設定
+CSRF_TRUSTED_ORIGINS = [
+    "https://sb-torihiki01.azurewebsites.net",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+# 環境変数からの追加CSRF信頼オリジン設定
+additional_origins = os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '')
+if additional_origins:
+    CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in additional_origins.split(',') if origin.strip()])
+
+# Azure App Serviceのプロキシ設定
+USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# CSRF設定の強化
+CSRF_COOKIE_SECURE = not DEBUG  # HTTPSでのみCSRFクッキーを送信（本番環境）
+CSRF_COOKIE_HTTPONLY = True     # JavaScriptからアクセス不可
+CSRF_COOKIE_SAMESITE = 'Lax'    # CSRF攻撃を防ぐ
 
 
 INSTALLED_APPS = [
@@ -86,6 +121,22 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# セキュリティ設定の強化
+if not DEBUG:
+    # 本番環境でのセキュリティ設定
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000  # 1年
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_BROWSER_XSS_FILTER = True
+    X_FRAME_OPTIONS = 'DENY'
+    
+    # セッション設定
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -97,5 +148,12 @@ LOGGING = {
     'root': {
         'handlers': ['console'],
         'level': 'INFO',
+    },
+    'loggers': {
+        'django.security': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }

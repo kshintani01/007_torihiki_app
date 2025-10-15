@@ -466,9 +466,6 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
         return {
             "error": "モデルが利用できません。モデルファイルの読み込みに失敗している可能性があります。",
             "pred_class": None,
-            "proba": {},
-            "threshold": float(threshold),
-            "decision": False,
             "used_topk": int(topk or 0),
         }
     
@@ -478,12 +475,12 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
         X = _normalize_single_row(X)
         X = _restrict_to_topk(X, topk)
         
-        # 予測実行
+        # 予測実行（確率ベースではなく直接予測）
         proba = _predict_proba(MODEL, X)[0]
         
         # 予測結果の安全性を確保
         if len(proba) == 0 or not np.isfinite(proba).all():
-            raise ValueError("予測確率が無効です")
+            raise ValueError("予測結果が無効です")
             
         pred_idx = int(np.argmax(proba))
         
@@ -495,20 +492,8 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
         else:
             pred_class = f"クラス{pred_idx}"
         
-        decision = bool(proba[pred_idx] >= float(threshold))
-        
-        # 確率辞書を安全に作成
-        proba_dict = {}
-        for i, cls in enumerate(CLASSES):
-            if i < len(proba):
-                cls_name = str(cls) if cls is not None and str(cls).strip() != '' else f"クラス{i}"
-                proba_dict[cls_name] = float(proba[i])
-        
         return {
             "pred_class": str(pred_class),
-            "proba": proba_dict,
-            "threshold": float(threshold),
-            "decision": decision,
             "used_topk": int(topk or 0),
         }
     except Exception as e:
@@ -516,9 +501,6 @@ def predict_one(features: dict, threshold: float = 0.5, topk: Optional[int] = No
         return {
             "error": f"予測処理でエラーが発生しました: {str(e)}",
             "pred_class": None,
-            "proba": {},
-            "threshold": float(threshold),
-            "decision": False,
             "used_topk": int(topk or 0),
         }
 
@@ -593,7 +575,7 @@ def _apply_topk_and_align(df: pd.DataFrame, topk: int, pipeline=None) -> pd.Data
 def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
     """
     先に AML を試し、ダメならローカルで推論する。
-    戻り値: pred_class / pred_prob_* / used_scorer 列を付与した DataFrame
+    戻り値: pred_class / used_scorer 列を付与した DataFrame（確率列は削除済み）
     """
     # --- 1) Azure ML endpoint を試す ---
     if aml_enabled():
@@ -624,8 +606,7 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
                 except Exception:
                     pass
                 part["pred_class"] = [classes[i] for i in best]
-                for j, c in enumerate(classes):
-                    part[f"pred_prob_{c}"] = proba[:, j]
+                # 確率列の出力を削除
                 part["used_scorer"] = "local"
                 out_parts.append(part)
         if out_parts:
@@ -640,11 +621,14 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
         proba = _predict_proba(MODEL, aligned)
         classes = get_classes()
         
+        # 予測実行（確率出力機能削除）
+        proba = _predict_proba(MODEL, aligned)
+        classes = get_classes()
+        
         best = proba.argmax(axis=1)
         out = df.copy().reset_index(drop=True)
         out["pred_class"] = [classes[i] for i in best]
-        for j, c in enumerate(classes):
-            out[f"pred_prob_{c}"] = proba[:, j]
+        # 確率列の出力を削除
         out["used_scorer"] = "local"
         src = MODEL_SOURCE or "local:model"
         print(f"[SCORER] Used: Local model -> {src}")
@@ -669,14 +653,13 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
 def predict_one(record: dict, topk: int = 0) -> dict:
     """
     1件版。内部的には DataFrame 化して predict_df に委譲。
+    確率出力機能は削除済み。
     """
     df = pd.DataFrame([record])
     res = predict_df(df, topk=topk)
     row = res.iloc[0]
-    proba = {k.replace("pred_prob_", ""): float(row[k]) for k in res.columns if k.startswith("pred_prob_")}
     return {
         "pred_class": row.get("pred_class"),
-        "proba": proba or None,
         "used_scorer": row.get("used_scorer")
     }
 

@@ -28,7 +28,8 @@ def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     return v if (v is not None and str(v).strip() != "") else default
 
 AML_DEBUG = (_env("AML_DEBUG", "0") or "0").strip().lower() not in ("", "0", "false", "off")
-OUTPUT_PROBA = (_env("OUTPUT_PROBA", "1") or "1").strip().lower() not in ("0", "false", "no", "off")
+# 確率出力機能を削除: 予測クラスのみ出力
+OUTPUT_PROBA = False
 
 AML_BATCH_ROWS = int(_env("AML_BATCH_ROWS", "0"))               # 0 or 負ならバッチ無効
 AML_NUM_NULL_FILL = _env("AML_NUM_NULL_FILL", None)             # 例: "0"（数値欠損埋め／任意）
@@ -152,9 +153,9 @@ def _payload_from_df(df: pd.DataFrame) -> dict:
 def _parse_response(obj: dict) -> Tuple[Optional[List[str]], Optional[np.ndarray], Optional[List[str]]]:
     """
     返り値: (classes, proba_matrix, predicted_labels)
-    - classes: ["A","B",...]
-    - proba_matrix: shape=(n_samples, n_classes)
-    - predicted_labels: ["A","B",...]（確率なしのとき）
+    - classes: ["A","B",...]（非推奨：確率処理は削除済み）
+    - proba_matrix: 常にNone（確率出力機能削除）
+    - predicted_labels: ["A","B",...]（予測クラスのみ使用）
     """
     if isinstance(obj, list) and obj and all(not isinstance(x, dict) for x in obj):
         return None, None, obj
@@ -243,10 +244,7 @@ def _to_output_df(src_df: pd.DataFrame, classes, proba, labels) -> pd.DataFrame:
     if proba is not None and classes:
         best = proba.argmax(axis=1)
         out["pred_class"] = [classes[i] for i in best]
-        # 確率は設定で出す/出さないを制御
-        if OUTPUT_PROBA:
-            for j, c in enumerate(classes):
-                out[f"pred_prob_{c}"] = proba[:, j]
+        # 確率出力機能は削除：pred_classのみ出力
         return out
     raise RuntimeError("AML 応答の解釈に失敗(proba/labels なし)")
 
@@ -295,7 +293,8 @@ def _score_once(scoring_uri: str,
 # =============== 公開エントリポイント ===============
 def score_via_aml(df: pd.DataFrame, *, allow_internal_chunk: bool = True, allow_local_fallback: bool = True, **kwargs,) -> Tuple[pd.DataFrame, dict]:
     """
-    df を AML に送り、pred_class（＋必要に応じて pred_prob_*）列を付与して返す。
+    df を AML に送り、pred_class 列のみを付与して返す。
+    確率出力機能は削除済み。
     例外は上位で捕捉し、ローカル推論にフォールバックさせることを想定。
     """
     if "allow_internal_chunk" in kwargs:

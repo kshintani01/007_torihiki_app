@@ -46,14 +46,12 @@
 <section class="result">
 <h2>結果</h2>
 <p><strong>予測クラス:</strong> {{ result.pred_class }}</p>
-<p><strong>確率:</strong>
-{% for k,v in result.proba.items %}
-<span class="badge">{{ k }}: {{ v|floatformat:3 }}</span>
-{% endfor %}
-</p>
-<p><strong>判定結果:</strong>
-<span class="badge">最高確率: {{ result.pred_class }}</span>
-</p>
+{% if result.used_scorer %}
+<p><strong>使用モデル:</strong> {{ result.used_scorer }}</p>
+{% endif %}
+{% if result.error %}
+<p class="error"><strong>エラー:</strong> {{ result.error }}</p>
+{% endif %}
 
 
 {% if input_data %}
