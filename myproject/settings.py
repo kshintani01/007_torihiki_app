@@ -1,9 +1,13 @@
 from pathlib import Path
 import os
 from django.core.management.utils import get_random_secret_key
+from dotenv import load_dotenv
 
 # プロジェクトのベースディレクトリ
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# .envファイルを読み込み
+load_dotenv(BASE_DIR / '.env')
 SECRET_KEY = "h4cf#n=iz+#u*!bdaps2%andk!tu(o1lnc@w76ok=_nkfr4xx7"
 
 # 環境変数からDEBUGモードを設定（デフォルトはFalse）
