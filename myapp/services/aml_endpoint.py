@@ -337,13 +337,13 @@ def score_via_aml(df: pd.DataFrame, *, allow_internal_chunk: bool = True, allow_
             out = _score_or_split(scoring_uri, shaped_all, df, auth_mode, api_key, timeout)
         else:
             out = _score_once(scoring_uri, shaped_all, df, auth_mode, api_key, timeout)
-        return out.assign(used_scorer="aml"), {"used": "aml", "endpoint": scoring_uri}
+        return out, {"used": "aml", "endpoint": scoring_uri}
 
     batch = AML_BATCH_ROWS
     outs: List[pd.DataFrame] = []
     if not batch or batch <= 0:
         out = _score_or_split(scoring_uri, shaped_all, df, auth_mode, api_key, timeout)
-        return out.assign(used_scorer="aml"), {"used": "aml", "endpoint": scoring_uri} 
+        return out, {"used": "aml", "endpoint": scoring_uri} 
 
     for start in range(0, len(shaped_all), batch):
         part_in  = shaped_all.iloc[start:start+batch]
@@ -355,7 +355,6 @@ def score_via_aml(df: pd.DataFrame, *, allow_internal_chunk: bool = True, allow_
         outs.append(part_out)
 
     merged = pd.concat(outs, axis=0, ignore_index=True)
-    merged["used_scorer"] = "aml"
     return merged, {"used": "aml", "endpoint": scoring_uri}
 
 def get_batch_rows() -> int:

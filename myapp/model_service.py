@@ -2,7 +2,6 @@
 import os, io, json, joblib, logging
 import numpy as np
 import pandas as pd
-import joblib
 from django.conf import settings
 from .services.blob_store import download_joblib_bytes, download_text, models_path, config_path
 from .services.aml_endpoint import aml_enabled, score_via_aml, aml_enabled_reason, score_df_in_batches
@@ -590,8 +589,6 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
                         part.index = range(sl.start, sl.stop)
                 except Exception:
                     pass
-                if "used_scorer" not in part.columns:
-                    part["used_scorer"] = "aml"
                 out_parts.append(part)
             else:
                 sub = df.iloc[sl]
@@ -607,7 +604,6 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
                     pass
                 part["pred_class"] = [classes[i] for i in best]
                 # 確率列の出力を削除
-                part["used_scorer"] = "local"
                 out_parts.append(part)
         if out_parts:
             out = pd.concat(out_parts, axis=0).sort_index(kind="mergesort").reset_index(drop=True)
@@ -621,15 +617,10 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
         proba = _predict_proba(MODEL, aligned)
         classes = get_classes()
         
-        # 予測実行（確率出力機能削除）
-        proba = _predict_proba(MODEL, aligned)
-        classes = get_classes()
-        
         best = proba.argmax(axis=1)
         out = df.copy().reset_index(drop=True)
         out["pred_class"] = [classes[i] for i in best]
         # 確率列の出力を削除
-        out["used_scorer"] = "local"
         src = MODEL_SOURCE or "local:model"
         print(f"[SCORER] Used: Local model -> {src}")
         logger.info(f"[SCORER] Used: Local model -> {src}")
@@ -641,7 +632,6 @@ def predict_df(df: pd.DataFrame, topk: int = 0) -> pd.DataFrame:
         out = df.copy().reset_index(drop=True)
         out["pred_class"] = "モデル利用不可"
         out["error"] = str(e)
-        out["used_scorer"] = "error"
 
         err = f"[SCORER] Error during local scoring: {e}"
         print(err)
@@ -660,7 +650,6 @@ def predict_one(record: dict, topk: int = 0) -> dict:
     row = res.iloc[0]
     return {
         "pred_class": row.get("pred_class"),
-        "used_scorer": row.get("used_scorer")
     }
 
 
